@@ -36,7 +36,7 @@ const PORTS: [(u16, &str); 19] = [
 #[derive(Clone, Debug)]
 pub struct Device {
     pub ip: Ipv4Addr,
-    /// Hardware address, like "48:41:7b:f4:20:91".
+    /// Hardware address, like "02:1a:2b:3c:4d:5e".
     pub mac: Option<String>,
     pub name: Option<String>,
     pub maker: Option<String>,
