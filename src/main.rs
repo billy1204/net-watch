@@ -2,6 +2,7 @@
 compile_error!("Net Watch is a Linux app: it reads Linux's own network files.");
 
 mod charts;
+mod conns;
 mod devices;
 mod diag;
 mod dns;
@@ -548,6 +549,7 @@ impl App {
                 Ask::Diagnose => self.core.diagnose(),
                 Ask::Trace(to) => self.core.trace(to),
                 Ask::CheckDns => self.core.check_dns(),
+                Ask::LookConns => self.core.look_conns(),
                 Ask::SignIn => open_path(std::path::Path::new("http://cp.cloudflare.com/generate_204")),
                 Ask::ScanDevices => self.core.scan_devices(),
                 Ask::TestSpeed => self.core.test_speed_now(),
@@ -933,6 +935,10 @@ fn main() -> eframe::Result {
     match args.first().map(String::as_str) {
         Some("--probe") => {
             probe::print_once();
+            return Ok(());
+        }
+        Some("--conns") => {
+            conns::print_once();
             return Ok(());
         }
         Some("--dns") => {

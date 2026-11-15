@@ -1,5 +1,6 @@
 //! The window's tools. Home shows a card for each; opening one shows its
 //! screen. A new tool is one more file here and one more line in `all()`.
+mod apps;
 mod connection;
 mod devices;
 mod diagnose;
@@ -26,6 +27,8 @@ pub enum Ask {
     Trace(String),
     /// Run the DNS check.
     CheckDns,
+    /// Look at which programs are using the network.
+    LookConns,
     /// Open a web browser at a page a sign-in page will take over.
     SignIn,
     ScanDevices,
@@ -101,6 +104,7 @@ pub fn all(st: &Shared) -> Vec<Box<dyn Tool>> {
         Box::new(diagnose::Diagnose::new()),
         Box::new(lag::Lag::new()),
         Box::new(dnscheck::DnsCheck::new()),
+        Box::new(apps::Apps::new()),
         Box::new(speed::Speed),
         Box::new(firewall::Firewall),
         Box::new(devices::Devices),

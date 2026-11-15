@@ -67,6 +67,11 @@ pub struct Shared {
     /// The last DNS check, and whether one is running.
     pub dns: Option<crate::dns::Report>,
     pub checking_dns: bool,
+    /// Which programs are using the network, at the last look; whether a
+    /// look is under way; and whose each address seen is, kept between looks.
+    pub conns: Option<crate::conns::Snapshot>,
+    pub looking: bool,
+    pub known: crate::conns::Known,
     /// The last device scan, and whether one is running.
     pub devices: Option<Result<crate::devices::Scan, String>>,
     pub scanning: bool,
@@ -301,6 +306,25 @@ impl Core {
             c.repaint();
         });
         self.repaint();
+    }
+
+    /// Look at which programs are using the network, in the background.
+    /// Not for callers holding the state lock.
+    pub fn look_conns(&self) {
+        let mut st = self.state.lock().unwrap();
+        if std::mem::replace(&mut st.looking, true) {
+            return;
+        }
+        let (last, mut known) = (st.conns.clone(), std::mem::take(&mut st.known));
+        drop(st);
+        let c = self.clone();
+        std::thread::spawn(move || {
+            let snap = crate::conns::look(last.as_ref(), &mut known);
+            let mut st = c.state.lock().unwrap();
+            (st.conns, st.known, st.looking) = (Some(snap), known, false);
+            drop(st);
+            c.repaint();
+        });
     }
 
     /// Trace the route to `to` in the background. Not for callers holding

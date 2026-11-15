@@ -363,7 +363,10 @@ fn asn_of(text: &str) -> Option<u32> {
 fn owner_of(text: &str) -> Option<String> {
     let owner = text.rsplit('|').next()?.trim();
     let name = owner.split_once(" - ").map_or(owner, |(_, n)| n);
-    let name = name.split(',').next()?.trim();
+    let mut name = name.split(',').next()?.trim();
+    for tail in [" LLC", " Inc.", " Inc", " Ltd", " Limited", " Corporation", " Corp.", ".com"] {
+        name = name.strip_suffix(tail).unwrap_or(name).trim();
+    }
     (!name.is_empty()).then(|| name.to_string())
 }
 
@@ -390,6 +393,40 @@ fn whose(ips: &[Ipv4Addr]) -> (Vec<Option<String>>, Vec<Option<u32>>) {
 /// Who runs network `asn`.
 fn owner(asn: u32) -> Option<String> {
     ask(&[txt_question(0, &format!("AS{asn}.asn.cymru.com"))], txt_answer).pop().flatten().as_deref().and_then(owner_of)
+}
+
+/// Who runs the network each address is in, like "Google" or "Amazon.com",
+/// from Team Cymru's public lookup through this computer's name server.
+pub fn owners(ips: &[IpAddr]) -> Vec<Option<String>> {
+    let origin: Vec<Vec<u8>> = ips
+        .iter()
+        .enumerate()
+        .map(|(i, ip)| {
+            let name = match ip {
+                IpAddr::V4(v4) => {
+                    let o = v4.octets();
+                    format!("{}.{}.{}.{}.origin.asn.cymru.com", o[3], o[2], o[1], o[0])
+                }
+                IpAddr::V6(v6) => {
+                    let hex = format!("{:032x}", u128::from(*v6));
+                    let nibbles: Vec<String> = hex.chars().rev().map(String::from).collect();
+                    format!("{}.origin6.asn.cymru.com", nibbles.join("."))
+                }
+            };
+            txt_question(i as u16, &name)
+        })
+        .collect();
+    let asns: Vec<Option<u32>> = ask(&origin, txt_answer).iter().map(|t| t.as_deref().and_then(asn_of)).collect();
+    let mut unique: Vec<u32> = asns.iter().flatten().copied().collect();
+    unique.sort_unstable();
+    unique.dedup();
+    let names = ask(&unique.iter().enumerate().map(|(i, a)| txt_question(i as u16, &format!("AS{a}.asn.cymru.com"))).collect::<Vec<_>>(), txt_answer);
+    asns.iter()
+        .map(|a| {
+            let i = unique.binary_search(a.as_ref()?).ok()?;
+            names[i].as_deref().and_then(owner_of)
+        })
+        .collect()
 }
 
 fn private(ip: Ipv4Addr) -> bool {

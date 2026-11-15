@@ -52,6 +52,13 @@ and asks NetworkManager, so it runs on Linux only.
   switches this connection to it through Network, tried first and put back
   if the internet doesn't come back; "Use the router's again" undoes it.
   `net-watch --dns` prints it.
+- **What's using it?**: which programs on this computer have connections
+  open and whose servers they talk to (Google, Amazon, Cloudflare…; click a
+  program for every connection), which wait for others to connect from the
+  network, and how fast data is coming in and going out. Looks again every
+  3 seconds while it's open and not at all otherwise. Programs run by the
+  system or other users show by their user, as "System (…)", since only an
+  admin can see which program they are. `net-watch --conns` prints it.
 - **Firewall check**, when you ask for it: whether this computer's firewall
   is on, and which kinds of traffic get out (websites, name lookups, the
   clock, video calls, email, remote login, IPv6), each tried against a
@@ -205,6 +212,10 @@ cargo run --release -- --route example.com   # the route, hop by hop, printed
 
 ```bash
 cargo run --release -- --dns          # the DNS check, printed
+```
+
+```bash
+cargo run --release -- --conns        # programs using the network, printed
 ```
 
 ```bash
