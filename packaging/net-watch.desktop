@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Net Watch
+Comment=Keeps a record of internet outages and speed
+Exec=net-watch
+Icon=net-watch
+Categories=Network;Utility;
+Terminal=false
+StartupWMClass=net-watch

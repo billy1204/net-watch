@@ -1,0 +1,34 @@
+[package]
+name = "net-watch"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+eframe = { version = "=0.36.2", default-features = false, features = ["glow", "default_fonts"] }
+# Speed tests and the "is there a login page in the way?" check.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+# Local times for the log and graphs.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Reading Ookla Speedtest's progress and results.
+serde_json = "1"
+# Checking the Speedtest download (already built in for ureq's rustls).
+ring = "0.17"
+
+# Linux/BSD desktop backends: native Wayland + X11 windows.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+eframe = { version = "=0.36.2", default-features = false, features = ["wayland", "x11"] }
+
+# Tray icon and desktop pop-ups over D-Bus.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+
+# Embeds the icon in the Windows .exe.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,36 @@
+name: Windows build
+
+# Builds net-watch.exe on Windows and attaches it to the release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the .exe to
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - run: cargo build --release --locked
+      - name: Attach to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp target/release/net-watch.exe Net-Watch-windows-x86_64.exe
+          gh release upload "$TAG" Net-Watch-windows-x86_64.exe THIRD-PARTY-LICENSES.md --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Net-Watch-windows-x86_64
+          path: Net-Watch-windows-x86_64.exe

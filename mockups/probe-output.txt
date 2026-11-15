@@ -1,0 +1,15 @@
+Uptime check
+  ok    router 192.168.1.254         1.6 ms
+  ok    Cloudflare TCP 443           17.0 ms
+  ok    Cloudflare DNS               16.9 ms
+  ok    Google TCP 443               18.0 ms
+  ok    Google DNS                   24.9 ms
+  ok    Quad9 TCP 443                19.0 ms
+  ok    Quad9 DNS                    67.9 ms
+  ok    HTTP generate_204            45.0 ms
+  => UP
+
+Speed test (speed.cloudflare.com)
+  latency  best 16.9 ms  avg 21.2 ms  jitter 7.9 ms
+  download 416.4 Mbps (25.0 MB in 0.48 s)
+  upload   101.8 Mbps (10.0 MB in 0.79 s)
