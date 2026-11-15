@@ -9,6 +9,16 @@ A Linux network diagnostic tool: Rust, eframe/egui 0.36, a ksni tray and an
 AppImage. It reads Linux's own network files (`/proc/net`, `/sys/class/net`)
 and asks NetworkManager, so it runs on Linux only.
 
+![Home, with a card for each tool](docs/screenshots/home.png)
+
+| | |
+|---|---|
+| **What's wrong?** step by step from the cable to websites ![What's wrong?](docs/screenshots/whats-wrong.png) | **Where's the lag?** hop by hop, and whose part of the way ![Where's the lag?](docs/screenshots/wheres-the-lag.png) |
+| **DNS check** against Cloudflare, Google and Quad9 ![DNS check](docs/screenshots/dns-check.png) | **What's using it?** programs and whose servers they talk to ![What's using it?](docs/screenshots/whats-using-it.png) |
+| **Connection**: uptime, the hour grid and latency ![Connection](docs/screenshots/connection.png) | **Dark themes** too ![Home in a dark theme](docs/screenshots/home-dark.png) |
+
+Personal details (network name, addresses, provider) are blurred in these.
+
 ## What you get
 
 - **Tray icon** that is green when online, amber when some checks fail, red
