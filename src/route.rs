@@ -327,13 +327,7 @@ fn ask(questions: &[Vec<u8>], read: fn(&[u8]) -> Option<String>) -> Vec<Option<S
 
 /// A DNS question for `name`'s text record.
 fn txt_question(id: u16, name: &str) -> Vec<u8> {
-    let mut q = vec![(id >> 8) as u8, id as u8, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
-    for label in name.split('.') {
-        q.push(label.len() as u8);
-        q.extend_from_slice(label.as_bytes());
-    }
-    q.extend_from_slice(&[0, 0, 16, 0, 1]);
-    q
+    crate::dns::question(id, name, 16)
 }
 
 /// The first text in a DNS answer to `txt_question`.

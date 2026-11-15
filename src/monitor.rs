@@ -64,6 +64,9 @@ pub struct Shared {
     /// The last "Where's the lag?" trace, filled in as it runs.
     pub route: Option<crate::route::Trace>,
     pub tracing: bool,
+    /// The last DNS check, and whether one is running.
+    pub dns: Option<crate::dns::Report>,
+    pub checking_dns: bool,
     /// The last device scan, and whether one is running.
     pub devices: Option<Result<crate::devices::Scan, String>>,
     pub scanning: bool,
@@ -278,6 +281,23 @@ impl Core {
                 c.repaint();
             });
             c.state.lock().unwrap().diagnosing = false;
+            c.repaint();
+        });
+        self.repaint();
+    }
+
+    /// Run the DNS check in the background. Not for callers holding the
+    /// state lock.
+    pub fn check_dns(&self) {
+        if std::mem::replace(&mut self.state.lock().unwrap().checking_dns, true) {
+            return;
+        }
+        let c = self.clone();
+        std::thread::spawn(move || {
+            let report = crate::dns::check();
+            let mut st = c.state.lock().unwrap();
+            (st.dns, st.checking_dns) = (Some(report), false);
+            drop(st);
             c.repaint();
         });
         self.repaint();

@@ -4,6 +4,7 @@ compile_error!("Net Watch is a Linux app: it reads Linux's own network files.");
 mod charts;
 mod devices;
 mod diag;
+mod dns;
 mod firewall;
 mod icon;
 mod look;
@@ -142,6 +143,9 @@ impl App {
         }
         if std::env::var_os("NET_WATCH_DIAGNOSE").is_some() {
             asks.push(Ask::Diagnose);
+        }
+        if std::env::var_os("NET_WATCH_DNS").is_some() {
+            asks.push(Ask::CheckDns);
         }
         if let Some(to) = std::env::var("NET_WATCH_ROUTE").ok() {
             asks.push(Ask::Trace(to));
@@ -543,6 +547,7 @@ impl App {
                 Ask::CheckFirewall => self.core.check_firewall(),
                 Ask::Diagnose => self.core.diagnose(),
                 Ask::Trace(to) => self.core.trace(to),
+                Ask::CheckDns => self.core.check_dns(),
                 Ask::SignIn => open_path(std::path::Path::new("http://cp.cloudflare.com/generate_204")),
                 Ask::ScanDevices => self.core.scan_devices(),
                 Ask::TestSpeed => self.core.test_speed_now(),
@@ -928,6 +933,10 @@ fn main() -> eframe::Result {
     match args.first().map(String::as_str) {
         Some("--probe") => {
             probe::print_once();
+            return Ok(());
+        }
+        Some("--dns") => {
+            dns::print_once();
             return Ok(());
         }
         Some("--route") => {

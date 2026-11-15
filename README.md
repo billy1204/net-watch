@@ -44,6 +44,14 @@ and asks NetworkManager, so it runs on Linux only.
   "AT&T Enterprises") and beyond, and finds where lost messages start.
   "Copy report" gives your provider every hop. `net-watch --route [site]`
   prints it.
+- **DNS check**, when you ask for it: times this computer's DNS server
+  against Cloudflare, Google and Quad9 (8 popular names, 8 made-up ones that
+  force a fresh lookup), checks it answers reliably and doesn't send
+  mistyped addresses to an ad page, and says whether lookups are encrypted.
+  When a public one is clearly faster (or yours doesn't answer), "Use …"
+  switches this connection to it through Network, tried first and put back
+  if the internet doesn't come back; "Use the router's again" undoes it.
+  `net-watch --dns` prints it.
 - **Firewall check**, when you ask for it: whether this computer's firewall
   is on, and which kinds of traffic get out (websites, name lookups, the
   clock, video calls, email, remote login, IPv6), each tried against a
@@ -196,6 +204,10 @@ cargo run --release -- --route example.com   # the route, hop by hop, printed
 ```
 
 ```bash
+cargo run --release -- --dns          # the DNS check, printed
+```
+
+```bash
 bash packaging/build_appimage.sh      # Net-Watch-x86_64.AppImage
 ```
 
@@ -207,7 +219,8 @@ help take screenshots;
 Wi-Fi list on Network;
 `NET_WATCH_FIREWALL=1`, `NET_WATCH_SCAN=1` and `NET_WATCH_DIAGNOSE=1` run
 the firewall check, the device scan and "What's wrong?" on start, and
-`NET_WATCH_ROUTE=Cloudflare` (or a site) traces the route
+`NET_WATCH_ROUTE=Cloudflare` (or a site) traces the route and
+`NET_WATCH_DNS=1` runs the DNS check
 (`NET_WATCH_DETAILS=1` with its details showing);
 `NET_WATCH_TEST_LIMIT=secs` shortens the 2-minute limit on a speed test;
 `NET_WATCH_FAKE_SPEED=1` makes speed tests up without Speedtest or the network; `NET_WATCH_TEST_SOON=1` runs the first speed test a few seconds after

@@ -3,6 +3,7 @@
 mod connection;
 mod devices;
 mod diagnose;
+mod dnscheck;
 mod firewall;
 mod lag;
 pub mod network;
@@ -23,6 +24,8 @@ pub enum Ask {
     Diagnose,
     /// Trace the route to "Cloudflare", "Google" or a website someone typed.
     Trace(String),
+    /// Run the DNS check.
+    CheckDns,
     /// Open a web browser at a page a sign-in page will take over.
     SignIn,
     ScanDevices,
@@ -97,6 +100,7 @@ pub fn all(st: &Shared) -> Vec<Box<dyn Tool>> {
         Box::new(connection::Connection),
         Box::new(diagnose::Diagnose::new()),
         Box::new(lag::Lag::new()),
+        Box::new(dnscheck::DnsCheck::new()),
         Box::new(speed::Speed),
         Box::new(firewall::Firewall),
         Box::new(devices::Devices),
