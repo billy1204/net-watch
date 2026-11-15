@@ -165,7 +165,7 @@ fn neighbours(net: &Net) -> HashMap<Ipv4Addr, String> {
 }
 
 /// A DNS question for the name of `ip` ("4.3.2.1.in-addr.arpa").
-fn name_question(id: u16, ip: Ipv4Addr) -> Vec<u8> {
+pub fn name_question(id: u16, ip: Ipv4Addr) -> Vec<u8> {
     let mut q = vec![(id >> 8) as u8, id as u8, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
     let o = ip.octets();
     for label in [o[3].to_string(), o[2].to_string(), o[1].to_string(), o[0].to_string(), "in-addr".into(), "arpa".into()] {
@@ -185,7 +185,7 @@ fn netbios_question() -> Vec<u8> {
 }
 
 /// A name in a DNS message at `i`, following pointers; and where it ends.
-fn read_name(b: &[u8], mut i: usize) -> Option<(String, usize)> {
+pub fn read_name(b: &[u8], mut i: usize) -> Option<(String, usize)> {
     let (mut labels, mut end, mut hops) = (Vec::new(), None, 0);
     loop {
         let len = *b.get(i)? as usize;
@@ -209,7 +209,7 @@ fn read_name(b: &[u8], mut i: usize) -> Option<(String, usize)> {
 }
 
 /// The name in a DNS answer to `name_question`.
-fn name_answer(b: &[u8]) -> Option<String> {
+pub fn name_answer(b: &[u8]) -> Option<String> {
     if b.len() < 12 || b[2] & 0x80 == 0 {
         return None;
     }

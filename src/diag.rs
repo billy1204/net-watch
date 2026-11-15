@@ -256,22 +256,22 @@ fn name_servers() -> Vec<String> {
 
 // -- Ping --------------------------------------------------------------------
 
-struct Ping {
-    sent: u32,
-    got: u32,
-    avg_ms: Option<f32>,
-    max_ms: Option<f32>,
+pub struct Ping {
+    pub sent: u32,
+    pub got: u32,
+    pub avg_ms: Option<f32>,
+    pub max_ms: Option<f32>,
 }
 
 impl Ping {
-    fn loss(&self) -> u32 {
+    pub fn loss(&self) -> u32 {
         if self.sent == 0 { 100 } else { (self.sent - self.got) * 100 / self.sent }
     }
 }
 
 /// `count` pings to `ip`, 0.2 s apart (the quickest allowed without admin
 /// rights); `None` when `ping` couldn't run.
-fn ping(ip: IpAddr, count: u32, extra: &[&str]) -> Option<Ping> {
+pub fn ping(ip: IpAddr, count: u32, extra: &[&str]) -> Option<Ping> {
     let out = Command::new("ping")
         .env("LC_ALL", "C")
         .args(["-n", "-q", "-i", "0.2", "-W", "1", "-w", "4", "-c"])
@@ -297,7 +297,7 @@ fn parse_ping(text: &str) -> Option<Ping> {
     Some(Ping { sent, got, avg_ms: rtt.get(1).copied(), max_ms: rtt.get(2).copied() })
 }
 
-fn ms(v: f32) -> String {
+pub fn ms(v: f32) -> String {
     if v < 10.0 { format!("{v:.1} ms") } else { format!("{v:.0} ms") }
 }
 

@@ -38,6 +38,12 @@ and asks NetworkManager, so it runs on Linux only.
   step that fails and says in plain words what it means and what to try.
   "Show details" has the numbers; "Copy report" puts it all on the
   clipboard for your provider. `net-watch --diagnose` prints it.
+- **Where's the lag?**, when you ask for it: follows the way to Cloudflare,
+  Google or a website you type, hop by hop, times each hop (10 pings) and
+  splits the delay into your home network, your provider (named, like
+  "AT&T Enterprises") and beyond, and finds where lost messages start.
+  "Copy report" gives your provider every hop. `net-watch --route [site]`
+  prints it.
 - **Firewall check**, when you ask for it: whether this computer's firewall
   is on, and which kinds of traffic get out (websites, name lookups, the
   clock, video calls, email, remote login, IPv6), each tried against a
@@ -132,6 +138,16 @@ and so on). Makers come from the IEEE list when the system has one
 hardware address, shown as "Private address". Every device seen is kept in
 `devices-<router>.csv`, one list per network.
 
+**Where's the lag?** It runs `ping` with a limit on how many hops the
+message may go (`-t 1`, `-t 2`, …): each router where it runs out says so,
+which gives the way out, like traceroute but without admin rights. Each hop
+then gets 10 pings. Hop names come from this computer's own name server;
+whose network each hop is in comes from Team Cymru's public lookup
+(`origin.asn.cymru.com`), asked the same way, so only router addresses
+leave the computer. What's typed is cut down to the site's name (letters,
+digits, dots and dashes) and looked up first; `ping` only ever gets an
+address.
+
 ### Why Ookla
 
 Providers know and trust speedtest.net results, the servers are close by
@@ -176,6 +192,10 @@ cargo run --release -- --diagnose     # the "What's wrong?" check, printed
 ```
 
 ```bash
+cargo run --release -- --route example.com   # the route, hop by hop, printed
+```
+
+```bash
 bash packaging/build_appimage.sh      # Net-Watch-x86_64.AppImage
 ```
 
@@ -186,7 +206,8 @@ help take screenshots;
 `NET_WATCH_TOOL=devices` opens a tool by name, and `NET_WATCH_PICK=1` the
 Wi-Fi list on Network;
 `NET_WATCH_FIREWALL=1`, `NET_WATCH_SCAN=1` and `NET_WATCH_DIAGNOSE=1` run
-the firewall check, the device scan and "What's wrong?" on start
+the firewall check, the device scan and "What's wrong?" on start, and
+`NET_WATCH_ROUTE=Cloudflare` (or a site) traces the route
 (`NET_WATCH_DETAILS=1` with its details showing);
 `NET_WATCH_TEST_LIMIT=secs` shortens the 2-minute limit on a speed test;
 `NET_WATCH_FAKE_SPEED=1` makes speed tests up without Speedtest or the network; `NET_WATCH_TEST_SOON=1` runs the first speed test a few seconds after

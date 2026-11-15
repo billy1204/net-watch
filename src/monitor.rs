@@ -61,6 +61,9 @@ pub struct Shared {
     /// The last "What's wrong?" check, filled in step by step while it runs.
     pub diag: Option<crate::diag::Report>,
     pub diagnosing: bool,
+    /// The last "Where's the lag?" trace, filled in as it runs.
+    pub route: Option<crate::route::Trace>,
+    pub tracing: bool,
     /// The last device scan, and whether one is running.
     pub devices: Option<Result<crate::devices::Scan, String>>,
     pub scanning: bool,
@@ -275,6 +278,27 @@ impl Core {
                 c.repaint();
             });
             c.state.lock().unwrap().diagnosing = false;
+            c.repaint();
+        });
+        self.repaint();
+    }
+
+    /// Trace the route to `to` in the background. Not for callers holding
+    /// the state lock.
+    pub fn trace(&self, to: String) {
+        let mut st = self.state.lock().unwrap();
+        if std::mem::replace(&mut st.tracing, true) {
+            return;
+        }
+        st.route = None;
+        drop(st);
+        let c = self.clone();
+        std::thread::spawn(move || {
+            crate::route::run(&to, &|t| {
+                c.state.lock().unwrap().route = Some(t.clone());
+                c.repaint();
+            });
+            c.state.lock().unwrap().tracing = false;
             c.repaint();
         });
         self.repaint();

@@ -11,6 +11,7 @@ mod monitor;
 mod netif;
 mod ookla;
 mod probe;
+mod route;
 mod store;
 mod tools;
 mod tray;
@@ -141,6 +142,9 @@ impl App {
         }
         if std::env::var_os("NET_WATCH_DIAGNOSE").is_some() {
             asks.push(Ask::Diagnose);
+        }
+        if let Some(to) = std::env::var("NET_WATCH_ROUTE").ok() {
+            asks.push(Ask::Trace(to));
         }
         // Dev aids: NET_WATCH_TOOL=Devices opens a tool, NET_WATCH_SETTINGS=1
         // opens Settings.
@@ -538,6 +542,7 @@ impl App {
             match ask {
                 Ask::CheckFirewall => self.core.check_firewall(),
                 Ask::Diagnose => self.core.diagnose(),
+                Ask::Trace(to) => self.core.trace(to),
                 Ask::SignIn => open_path(std::path::Path::new("http://cp.cloudflare.com/generate_204")),
                 Ask::ScanDevices => self.core.scan_devices(),
                 Ask::TestSpeed => self.core.test_speed_now(),
@@ -923,6 +928,10 @@ fn main() -> eframe::Result {
     match args.first().map(String::as_str) {
         Some("--probe") => {
             probe::print_once();
+            return Ok(());
+        }
+        Some("--route") => {
+            route::print_once(args.get(1).map_or("Cloudflare", String::as_str));
             return Ok(());
         }
         Some("--diagnose") => {
