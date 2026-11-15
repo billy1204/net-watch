@@ -18,17 +18,12 @@ pub const PRIVACY_URL: &str = "https://www.speedtest.net/about/privacy";
 // publish checksums, so these were taken from its files (unchanged since
 // August 2022; each matches the MD5 its server gives as the ETag). A
 // download that doesn't match isn't installed.
-#[cfg(windows)]
-const DOWNLOAD: (&str, &str) = (
-    "https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-win64.zip",
-    "13e3d888b845d301a556419e31f14ab9bff57e3f06089ef2fd3bdc9ba6841efa",
-);
-#[cfg(all(not(windows), target_arch = "aarch64"))]
+#[cfg(target_arch = "aarch64")]
 const DOWNLOAD: (&str, &str) = (
     "https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-aarch64.tgz",
     "3953d231da3783e2bf8904b6dd72767c5c6e533e163d3742fd0437affa431bd3",
 );
-#[cfg(all(not(windows), not(target_arch = "aarch64")))]
+#[cfg(not(target_arch = "aarch64"))]
 const DOWNLOAD: (&str, &str) = (
     "https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz",
     "5690596c54ff9bed63fa3732f818a05dbc2db19ad36ed68f21ca5f64d5cfeeb7",
@@ -40,7 +35,7 @@ fn time_limit() -> Duration {
     Duration::from_secs(std::env::var("NET_WATCH_TEST_LIMIT").ok().and_then(|s| s.parse().ok()).unwrap_or(120))
 }
 
-const EXE: &str = if cfg!(windows) { "speedtest.exe" } else { "speedtest" };
+const EXE: &str = "speedtest";
 
 /// Where Net Watch keeps its own copy.
 fn own_copy() -> Option<PathBuf> {
@@ -99,7 +94,7 @@ pub fn install() -> Result<PathBuf, String> {
     let dest = own_copy().ok_or("no data folder")?;
     let dir = dest.parent().unwrap().to_path_buf();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let archive = dir.join(if cfg!(windows) { "download.zip" } else { "download.tgz" });
+    let archive = dir.join("download.tgz");
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(60)))
         .build()
@@ -118,8 +113,7 @@ pub fn install() -> Result<PathBuf, String> {
     genuine(&body, DOWNLOAD.1)?;
     std::fs::write(&archive, body).map_err(|e| e.to_string())?;
     // Unpacked to one side, then moved into place, so a half-unpacked
-    // program is never run. `tar` comes with Linux and with Windows 10 and
-    // later, and on Windows also opens .zip files.
+    // program is never run.
     let unpack = dir.join("unpack");
     let _ = std::fs::remove_dir_all(&unpack);
     let ok = std::fs::create_dir_all(&unpack)
@@ -139,12 +133,6 @@ pub fn install() -> Result<PathBuf, String> {
 /// Stop the Speedtest program and anything it started, by its process id
 /// (the `Child` is busy being read from on the other thread).
 fn kill(pid: u32) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).creation_flags(0x0800_0000).status();
-    }
-    #[cfg(not(windows))]
     let _ = Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).status();
 }
 
@@ -170,7 +158,6 @@ pub fn speed_test(report: &dyn Fn(&Live)) -> Result<Speed, String> {
     let mut cmd = Command::new(exe);
     // Its own process group, so a stuck test can be stopped with anything
     // it started.
-    #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = cmd
         .args(["--format=json", "--progress=yes", "--progress-update-interval=250", "--accept-license", "--accept-gdpr"])

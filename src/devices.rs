@@ -126,7 +126,6 @@ fn hosts(me: Ipv4Addr, bits: u32) -> (Vec<Ipv4Addr>, String) {
     (hosts, format!("{}/{bits}", Ipv4Addr::from(net)))
 }
 
-#[cfg(target_os = "linux")]
 fn network() -> Result<Net, String> {
     let table = std::fs::read_to_string("/proc/net/route").map_err(|e| e.to_string())?;
     let rows: Vec<Vec<&str>> = table.lines().skip(1).map(|l| l.split_whitespace().collect()).collect();
@@ -149,16 +148,8 @@ fn network() -> Result<Net, String> {
     Ok(Net { me, hosts, range, iface: Some(iface), router: Some(router) })
 }
 
-#[cfg(not(target_os = "linux"))]
-fn network() -> Result<Net, String> {
-    let me = my_address(Ipv4Addr::new(1, 1, 1, 1)).ok_or("not connected to a network")?;
-    let (hosts, range) = hosts(me, 24);
-    Ok(Net { me, hosts, range, iface: None, router: None })
-}
-
 /// The computer's address table: which addresses on the network answered,
 /// with their hardware addresses.
-#[cfg(target_os = "linux")]
 fn neighbours(net: &Net) -> HashMap<Ipv4Addr, String> {
     let table = std::fs::read_to_string("/proc/net/arp").unwrap_or_default();
     table
@@ -171,25 +162,6 @@ fn neighbours(net: &Net) -> HashMap<Ipv4Addr, String> {
             (ok && f.get(5).copied() == net.iface.as_deref()).then(|| Some((f[0].parse().ok()?, f.get(3)?.to_lowercase())))?
         })
         .collect()
-}
-
-#[cfg(windows)]
-fn neighbours(_: &Net) -> HashMap<Ipv4Addr, String> {
-    use std::os::windows::process::CommandExt;
-    let out = std::process::Command::new("arp").arg("-a").creation_flags(0x0800_0000).output();
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-    text.lines()
-        .filter_map(|l| {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            let mac = f.get(1)?.replace('-', ":").to_lowercase();
-            (mac.len() == 17 && mac != "ff:ff:ff:ff:ff:ff").then(|| Some((f[0].parse().ok()?, mac)))?
-        })
-        .collect()
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn neighbours(_: &Net) -> HashMap<Ipv4Addr, String> {
-    HashMap::new()
 }
 
 /// A DNS question for the name of `ip` ("4.3.2.1.in-addr.arpa").

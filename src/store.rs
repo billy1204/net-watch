@@ -73,17 +73,11 @@ pub struct SpeedRow {
 }
 
 fn base(var: &str, home_rel: &str) -> Option<PathBuf> {
-    #[cfg(windows)]
-    let base = {
-        let _ = (var, home_rel);
-        PathBuf::from(std::env::var_os("APPDATA")?)
-    };
-    #[cfg(not(windows))]
     let base = std::env::var_os(var).map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(home_rel)))?;
     Some(base.join("net-watch"))
 }
 
-/// Results: ~/.local/share/net-watch (Linux), %APPDATA%\net-watch (Windows).
+/// Results: ~/.local/share/net-watch.
 pub fn data_dir() -> Option<PathBuf> {
     std::env::var_os("NET_WATCH_DATA").map(PathBuf::from).or_else(|| base("XDG_DATA_HOME", ".local/share"))
 }

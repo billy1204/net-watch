@@ -36,7 +36,6 @@ impl Check {
 /// Default gateway from /proc/net/route. `Some(None)`: no route at all;
 /// `None`: can't tell, including a default route with no router on it (a
 /// VPN or a phone's tether), where knocking would only reach this computer.
-#[cfg(target_os = "linux")]
 pub fn gateway() -> Option<Option<[u8; 4]>> {
     let table = std::fs::read_to_string("/proc/net/route").ok()?;
     let default = table.lines().skip(1).map(|l| l.split_whitespace().collect::<Vec<_>>()).find(|f| f.get(1) == Some(&"00000000"));
@@ -45,13 +44,8 @@ pub fn gateway() -> Option<Option<[u8; 4]>> {
     (ip != [0; 4]).then_some(Some(ip))
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn gateway() -> Option<Option<[u8; 4]>> {
-    None
-}
-
 /// A TCP handshake; a refusal still proves the host answered.
-fn tcp(ip: [u8; 4], port: u16) -> Result<Duration, String> {
+pub fn tcp(ip: [u8; 4], port: u16) -> Result<Duration, String> {
     let start = Instant::now();
     match TcpStream::connect_timeout(&SocketAddr::from((ip, port)), TIMEOUT) {
         Ok(_) => Ok(start.elapsed()),
@@ -62,7 +56,7 @@ fn tcp(ip: [u8; 4], port: u16) -> Result<Duration, String> {
 }
 
 /// One DNS question (A record for example.com); checks the reply's ID.
-fn dns(server: [u8; 4]) -> Result<Duration, String> {
+pub fn dns(server: [u8; 4]) -> Result<Duration, String> {
     let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
     sock.set_read_timeout(Some(TIMEOUT)).map_err(|e| e.to_string())?;
     let id = (std::process::id() as u16) ^ (Instant::now().elapsed().subsec_nanos() as u16);
@@ -83,7 +77,7 @@ fn dns(server: [u8; 4]) -> Result<Duration, String> {
     }
 }
 
-fn agent(timeout: Duration) -> ureq::Agent {
+pub fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .user_agent(concat!("net-watch/", env!("CARGO_PKG_VERSION")))
@@ -91,7 +85,7 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .into()
 }
 
-fn page_204() -> Result<Duration, String> {
+pub fn page_204() -> Result<Duration, String> {
     let start = Instant::now();
     let resp = agent(TIMEOUT + Duration::from_secs(1)).get(PAGE_204).call().map_err(|e| e.to_string())?;
     match resp.status().as_u16() {
@@ -101,7 +95,7 @@ fn page_204() -> Result<Duration, String> {
 }
 
 /// Whether the router answers a knock on any common port.
-fn router(ip: [u8; 4]) -> bool {
+pub fn router(ip: [u8; 4]) -> bool {
     std::thread::scope(|s| {
         let knocks: Vec<_> = [53, 80, 443].map(|port| s.spawn(move || tcp(ip, port).is_ok())).into();
         knocks.into_iter().any(|k| k.join().unwrap_or(false))

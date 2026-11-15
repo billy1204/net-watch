@@ -58,6 +58,9 @@ pub struct Shared {
     /// The last firewall check, and whether one is running.
     pub firewall: Option<crate::firewall::Report>,
     pub checking_firewall: bool,
+    /// The last "What's wrong?" check, filled in step by step while it runs.
+    pub diag: Option<crate::diag::Report>,
+    pub diagnosing: bool,
     /// The last device scan, and whether one is running.
     pub devices: Option<Result<crate::devices::Scan, String>>,
     pub scanning: bool,
@@ -249,6 +252,29 @@ impl Core {
             st.firewall = Some(report);
             st.checking_firewall = false;
             drop(st);
+            c.repaint();
+        });
+        self.repaint();
+    }
+
+    /// Run the "What's wrong?" check in the background, showing each step
+    /// as it's done. Not for callers holding the state lock.
+    pub fn diagnose(&self) {
+        let mut st = self.state.lock().unwrap();
+        if std::mem::replace(&mut st.diagnosing, true) {
+            return;
+        }
+        st.diag = Some(crate::diag::Report { at: Local::now(), steps: Vec::new() });
+        drop(st);
+        let c = self.clone();
+        std::thread::spawn(move || {
+            crate::diag::run(&|step| {
+                if let Some(r) = c.state.lock().unwrap().diag.as_mut() {
+                    r.steps.push(step);
+                }
+                c.repaint();
+            });
+            c.state.lock().unwrap().diagnosing = false;
             c.repaint();
         });
         self.repaint();

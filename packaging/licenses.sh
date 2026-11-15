@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerate THIRD-PARTY-LICENSES.md: the notices of every crate in the
-# Linux and Windows builds (via cargo-about), then those of the bundled
+# Linux build (via cargo-about), then those of the bundled
 # fonts, Rust's standard library and the AppImage runtime (the last two
 # kept in packaging/notices, copied from each project's repository).
 set -euo pipefail

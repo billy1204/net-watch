@@ -160,7 +160,6 @@ fn try_kind(k: &Kind) -> Outcome {
 }
 
 /// This computer's own firewall, as far as we can tell without admin rights.
-#[cfg(target_os = "linux")]
 fn computer() -> (String, Option<bool>) {
     let active = |unit: &str| {
         std::process::Command::new("systemctl")
@@ -186,39 +185,6 @@ fn computer() -> (String, Option<bool>) {
         return ("On: nftables firewall rules are loaded at startup.".into(), Some(true));
     }
     ("No firewall program found on this computer (other programs, like VPNs, can still set rules).".into(), Some(false))
-}
-
-#[cfg(windows)]
-fn computer() -> (String, Option<bool>) {
-    use std::os::windows::process::CommandExt;
-    const NO_WINDOW: u32 = 0x0800_0000;
-    let out = std::process::Command::new("netsh").args(["advfirewall", "show", "allprofiles", "state"]).creation_flags(NO_WINDOW).output();
-    let Ok(out) = out else { return ("Couldn't ask Windows about its firewall.".into(), None) };
-    let text = String::from_utf8_lossy(&out.stdout);
-    // "Domain Profile Settings:" … "State  ON", for each of the three.
-    let mut profile = "";
-    let mut states = Vec::new();
-    for line in text.lines() {
-        if let Some(name) = line.trim().strip_suffix(" Profile Settings:") {
-            profile = if name.contains("Domain") { "work" } else if name.contains("Private") { "home" } else { "public" };
-        } else if let Some(state) = line.trim().strip_prefix("State") {
-            states.push((profile, state.trim().eq_ignore_ascii_case("ON")));
-        }
-    }
-    match (states.iter().all(|s| s.1), states.iter().any(|s| s.1)) {
-        _ if states.is_empty() => ("Couldn't read Windows Firewall's state.".into(), None),
-        (true, _) => ("On: Windows Firewall is on for every kind of network.".into(), Some(true)),
-        (false, true) => {
-            let off: Vec<&str> = states.iter().filter(|s| !s.1).map(|s| s.0).collect();
-            (format!("Mostly on: Windows Firewall is off for {} networks.", off.join(" and ")), Some(true))
-        }
-        (false, false) => ("Off: Windows Firewall is turned off.".into(), Some(false)),
-    }
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn computer() -> (String, Option<bool>) {
-    ("Can't tell on this system.".into(), None)
 }
 
 /// Run the whole check; takes about 5 seconds and almost no data.

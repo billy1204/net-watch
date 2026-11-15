@@ -1,7 +1,9 @@
-// No console window on Windows.
-#![cfg_attr(windows, windows_subsystem = "windows")]
+#[cfg(not(target_os = "linux"))]
+compile_error!("Net Watch is a Linux app: it reads Linux's own network files.");
+
 mod charts;
 mod devices;
+mod diag;
 mod firewall;
 mod icon;
 mod look;
@@ -11,7 +13,6 @@ mod ookla;
 mod probe;
 mod store;
 mod tools;
-#[cfg(target_os = "linux")]
 mod tray;
 
 use chrono::{Duration as Span, Local};
@@ -26,16 +27,12 @@ use store::{Cause, Time};
 
 /// Redraw the tray from the shared state (no-op without a tray).
 pub fn refresh_tray() {
-    #[cfg(target_os = "linux")]
     tray::refresh();
 }
 
-/// A desktop pop-up (Linux only for now).
+/// A desktop pop-up.
 pub fn notify(title: &str, body: &str) {
-    #[cfg(target_os = "linux")]
     tray::notify(title, body);
-    #[cfg(not(target_os = "linux"))]
-    let _ = (title, body);
 }
 
 /// "4 min 12 s", "47 min", "3 h 12 min", "2 days 3 h".
@@ -141,6 +138,9 @@ impl App {
         }
         if std::env::var_os("NET_WATCH_SCAN").is_some() {
             asks.push(Ask::ScanDevices);
+        }
+        if std::env::var_os("NET_WATCH_DIAGNOSE").is_some() {
+            asks.push(Ask::Diagnose);
         }
         // Dev aids: NET_WATCH_TOOL=Devices opens a tool, NET_WATCH_SETTINGS=1
         // opens Settings.
@@ -390,6 +390,13 @@ impl App {
                         self.check_asked = Some(last);
                         self.asks.push(Ask::CheckNow);
                     }
+                    // When it's down or shaky, the way to find out why.
+                    if matches!(status, Status::Down | Status::Shaky)
+                        && look::chip(ui, "What's wrong?", !st.diagnosing, true).on_hover_text("Check step by step where it breaks").clicked()
+                    {
+                        self.asks.push(Ask::Open(tools::DIAGNOSE));
+                        self.asks.push(Ask::Diagnose);
+                    }
                 });
             });
             if !narrow {
@@ -530,6 +537,8 @@ impl App {
         for ask in std::mem::take(&mut self.asks) {
             match ask {
                 Ask::CheckFirewall => self.core.check_firewall(),
+                Ask::Diagnose => self.core.diagnose(),
+                Ask::SignIn => open_path(std::path::Path::new("http://cp.cloudflare.com/generate_204")),
                 Ask::ScanDevices => self.core.scan_devices(),
                 Ask::TestSpeed => self.core.test_speed_now(),
                 Ask::CheckNow => self.core.check_now(),
@@ -807,7 +816,7 @@ fn theme_index(name: &str) -> usize {
 }
 
 fn home() -> PathBuf {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default()
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
 /// A path as people know it: `~/Downloads/x` rather than `/home/me/Downloads/x`.
@@ -819,8 +828,7 @@ fn show_path(path: &std::path::Path) -> String {
 }
 
 fn open_path(path: &std::path::Path) {
-    let cmd = if cfg!(windows) { "explorer" } else { "xdg-open" };
-    let _ = std::process::Command::new(cmd).arg(path).spawn();
+    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
 
 /// Write a plain-text report of the last `days` to the Downloads folder:
@@ -917,6 +925,10 @@ fn main() -> eframe::Result {
             probe::print_once();
             return Ok(());
         }
+        Some("--diagnose") => {
+            diag::print_once();
+            return Ok(());
+        }
         Some("--scan") => {
             devices::print_once();
             return Ok(());
@@ -945,10 +957,7 @@ fn main() -> eframe::Result {
         let core = core.clone();
         std::thread::spawn(move || netif::watch(core));
     }
-    #[cfg(target_os = "linux")]
     let has_tray = tray::start(core.clone());
-    #[cfg(not(target_os = "linux"))]
-    let has_tray = false;
 
     let app = Rc::new(RefCell::new(App::new(core.clone(), has_tray)));
     // Started at login: stay in the tray until asked.

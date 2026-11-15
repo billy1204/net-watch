@@ -5,8 +5,9 @@ connection, and keeps a record you can show your provider when it "keeps
 dropping": every outage with when it started, how long it lasted and whether
 your own router was still answering, plus regular speed tests.
 
-Same stack and look as Roku Remote: Rust, eframe/egui 0.36, a ksni tray on
-Linux, an AppImage and a Windows .exe.
+A Linux network diagnostic tool: Rust, eframe/egui 0.36, a ksni tray and an
+AppImage. It reads Linux's own network files (`/proc/net`, `/sys/class/net`)
+and asks NetworkManager, so it runs on Linux only.
 
 ## What you get
 
@@ -29,6 +30,14 @@ Linux, an AppImage and a Windows .exe.
   hour-by-hour grid (green, amber, red), the latency graph and the outage
   log; Speed test has the live test, the speed graph and every test. 24
   hours, 7 days or 30 days. The layout stacks in a narrow window.
+- **What's wrong?**, when you ask for it (or from Home's "What's wrong?"
+  when the connection is down or shaky): checks the connection in order,
+  from this computer out (cable or Wi-Fi and its signal, an address from
+  the router, the router answering, the internet, names (DNS), websites
+  and sign-in pages, then IPv6 and full-size packets), stops at the first
+  step that fails and says in plain words what it means and what to try.
+  "Show details" has the numbers; "Copy report" puts it all on the
+  clipboard for your provider. `net-watch --diagnose` prints it.
 - **Firewall check**, when you ask for it: whether this computer's firewall
   is on, and which kinds of traffic get out (websites, name lookups, the
   clock, video calls, email, remote login, IPv6), each tried against a
@@ -42,7 +51,7 @@ Linux, an AppImage and a Windows .exe.
   for the first time. Only on the network you're on when you turn it on
   (told apart by the router's hardware address); elsewhere it waits. Phones that change their made-up hardware address are
   recognised by name, so they don't set it off.
-- **Network adapters** (Linux, through NetworkManager): Home shows the one
+- **Network adapters** (through NetworkManager): Home shows the one
   the internet goes through, Ethernet or Wi-Fi, with its name (like
   `enp6s0`) and link speed or Wi-Fi network and signal; its gear opens the
   Network screen. There, pick an adapter at the top to turn it on or off
@@ -109,11 +118,11 @@ IMAP 993, SMTP 587, SSH 22, SMTP 25, and HTTPS over IPv6. No answer means
 something in between quietly drops it; a "no" means something turns it
 away. Port 25 and IPv6 being blocked are shown as normal. For this
 computer's firewall it reads ufw's settings or asks systemd about firewalld
-and nftables on Linux, and asks `netsh` on Windows; no admin rights needed.
+and nftables; no admin rights needed.
 
 **What's on the network?** The device scan sends one tiny UDP packet to
 every address on the home network (up to 1024 of them), then reads the
-computer's own address table (`/proc/net/arp`, or `arp -a` on Windows) to
+computer's own address table (`/proc/net/arp`) to
 see which answered. It asks those for their names three ways: the router
 (which often knows the names people gave their devices), the device itself
 over mDNS, and the Windows way (NetBIOS). It then knocks on a few telling
@@ -135,8 +144,8 @@ and publishes every result with the home IP address.
 ## Your data
 
 Everything stays on this computer, as CSV files you can open in a
-spreadsheet: `~/.local/share/net-watch` on Linux, `%APPDATA%\net-watch` on
-Windows (Settings has an "Open folder" button).
+spreadsheet: `~/.local/share/net-watch` (Settings has an "Open folder"
+button).
 
 | File | What's in it |
 |---|---|
@@ -163,12 +172,12 @@ cargo run --release -- --scan         # one device scan, printed
 ```
 
 ```bash
-bash packaging/build_appimage.sh      # Net-Watch-x86_64.AppImage
+cargo run --release -- --diagnose     # the "What's wrong?" check, printed
 ```
 
-The Windows .exe is built by `.github/workflows/windows.yml` when a release
-is published. On Windows there's no tray icon yet: closing the window
-minimizes it so watching carries on, and Settings has a Quit button.
+```bash
+bash packaging/build_appimage.sh      # Net-Watch-x86_64.AppImage
+```
 
 Dev aids: `NET_WATCH_DATA=dir` keeps data and settings in `dir`;
 `NET_WATCH_SIZE=1000x700`, `NET_WATCH_SCREENSHOT=out.ppm`,
@@ -176,8 +185,9 @@ Dev aids: `NET_WATCH_DATA=dir` keeps data and settings in `dir`;
 help take screenshots;
 `NET_WATCH_TOOL=devices` opens a tool by name, and `NET_WATCH_PICK=1` the
 Wi-Fi list on Network;
-`NET_WATCH_FIREWALL=1` and `NET_WATCH_SCAN=1` run the firewall check and
-the device scan on start;
+`NET_WATCH_FIREWALL=1`, `NET_WATCH_SCAN=1` and `NET_WATCH_DIAGNOSE=1` run
+the firewall check, the device scan and "What's wrong?" on start
+(`NET_WATCH_DETAILS=1` with its details showing);
 `NET_WATCH_TEST_LIMIT=secs` shortens the 2-minute limit on a speed test;
 `NET_WATCH_FAKE_SPEED=1` makes speed tests up without Speedtest or the network; `NET_WATCH_TEST_SOON=1` runs the first speed test a few seconds after
 starting; a file named `simulate-down` in the data folder fakes

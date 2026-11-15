@@ -202,23 +202,20 @@ impl Tool for Settings {
         });
         look::card(ui, |ui| {
             ui.label(egui::RichText::new("Desktop").strong());
-            #[cfg(target_os = "linux")]
-            {
-                row(ui, "Pop-ups", "When the internet drops and when it's back", &mut |ui| {
-                    look::toggle(ui, &mut p.popups);
-                });
-                let mut on = crate::tray::autostart();
-                let mut failed = None;
-                row(ui, "Start when I log in", "Starts hidden in the tray", &mut |ui| {
-                    if look::toggle(ui, &mut on).changed()
-                        && let Err(e) = crate::tray::set_autostart(on)
-                    {
-                        failed = Some(e);
-                    }
-                });
-                if let Some(e) = failed {
-                    v.asks.push(Ask::Note(format!("Couldn't change starting at login: {e}"), true, None));
+            row(ui, "Pop-ups", "When the internet drops and when it's back", &mut |ui| {
+                look::toggle(ui, &mut p.popups);
+            });
+            let mut on = crate::tray::autostart();
+            let mut failed = None;
+            row(ui, "Start when I log in", "Starts hidden in the tray", &mut |ui| {
+                if look::toggle(ui, &mut on).changed()
+                    && let Err(e) = crate::tray::set_autostart(on)
+                {
+                    failed = Some(e);
                 }
+            });
+            if let Some(e) = failed {
+                v.asks.push(Ask::Note(format!("Couldn't change starting at login: {e}"), true, None));
             }
             row(ui, "Animations", "Buttons ripple, highlights slide, the status dot breathes", &mut |ui| {
                 look::toggle(ui, &mut p.animate);

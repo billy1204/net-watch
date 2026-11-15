@@ -2,6 +2,7 @@
 //! screen. A new tool is one more file here and one more line in `all()`.
 mod connection;
 mod devices;
+mod diagnose;
 mod firewall;
 pub mod network;
 mod settings;
@@ -17,6 +18,10 @@ use std::path::PathBuf;
 /// takes the lock itself, so asking it from inside would deadlock.
 pub enum Ask {
     CheckFirewall,
+    /// Run the "What's wrong?" check.
+    Diagnose,
+    /// Open a web browser at a page a sign-in page will take over.
+    SignIn,
     ScanDevices,
     TestSpeed,
     CheckNow,
@@ -81,11 +86,13 @@ pub trait Tool {
 pub const SETTINGS: &str = settings::NAME;
 pub const SPEED: &str = speed::NAME;
 pub const NETWORK: &str = network::NAME;
+pub const DIAGNOSE: &str = diagnose::NAME;
 
 /// Every tool, in Home's order.
 pub fn all(st: &Shared) -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(connection::Connection),
+        Box::new(diagnose::Diagnose::new()),
         Box::new(speed::Speed),
         Box::new(firewall::Firewall),
         Box::new(devices::Devices),

@@ -17,6 +17,6 @@ accepted = [
     # webpki-roots: the Mozilla list of trusted certificates, for speed tests.
     "CDLA-Permissive-2.0",
 ]
-targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+targets = ["x86_64-unknown-linux-gnu"]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
