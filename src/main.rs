@@ -1,5 +1,8 @@
-#[cfg(not(target_os = "linux"))]
-compile_error!("Net Watch is a Linux app: it reads Linux's own network files.");
+// A windowed program on Windows: no console window opens with it.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+#[cfg(not(any(target_os = "linux", windows)))]
+compile_error!("Net Watch runs on Linux and Windows.");
 
 mod charts;
 mod conns;
@@ -16,7 +19,13 @@ mod probe;
 mod route;
 mod store;
 mod tools;
+#[cfg(target_os = "linux")]
 mod tray;
+#[cfg(windows)]
+#[path = "tray_win.rs"]
+mod tray;
+#[cfg(windows)]
+mod win;
 
 use chrono::{Duration as Span, Local};
 use eframe::egui::{self, Color32, vec2};
@@ -27,6 +36,14 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use store::{Cause, Time};
+
+/// A program to run; on Windows without a console window flashing up.
+pub fn cmd(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[cfg(windows)]
+    return win::command(program);
+    #[cfg(not(windows))]
+    std::process::Command::new(program)
+}
 
 /// Redraw the tray from the shared state (no-op without a tray).
 pub fn refresh_tray() {
@@ -485,10 +502,20 @@ impl App {
         // "Checked 12 s ago" keeps counting.
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
         self.take_screenshot(ui);
-        if !self.has_tray && ctx.input(|i| i.viewport().close_requested()) && !self.core.state.lock().unwrap().quit {
-            // No tray to come back from: keep watching, minimized.
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        if ctx.input(|i| i.viewport().close_requested()) && !self.core.state.lock().unwrap().quit {
+            if !self.has_tray {
+                // No tray to come back from: keep watching, minimized.
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            } else if cfg!(windows) {
+                // Windows can't open a window again once its event loop has
+                // ended, so closing hides it to the tray instead.
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                #[cfg(windows)]
+                win::hide_main();
+                self.core.state.lock().unwrap().hidden = true;
+                refresh_tray();
+            }
         }
         self.shortcuts(&ctx);
         if self.shown.0 != self.page || self.shown.1 == f64::NEG_INFINITY {
@@ -828,7 +855,8 @@ fn theme_index(name: &str) -> usize {
 }
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var).map(PathBuf::from).unwrap_or_default()
 }
 
 /// A path as people know it: `~/Downloads/x` rather than `/home/me/Downloads/x`.
@@ -840,6 +868,9 @@ fn show_path(path: &std::path::Path) -> String {
 }
 
 fn open_path(path: &std::path::Path) {
+    #[cfg(windows)]
+    win::open(path.as_os_str());
+    #[cfg(not(windows))]
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
 
@@ -932,6 +963,11 @@ impl eframe::App for Window {
 
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Printing to the terminal it was started from.
+    #[cfg(windows)]
+    if args.first().is_some_and(|a| a.starts_with("--") && a != "--hidden") {
+        win::attach_console();
+    }
     match args.first().map(String::as_str) {
         Some("--probe") => {
             probe::print_once();
@@ -968,6 +1004,11 @@ fn main() -> eframe::Result {
         _ => {}
     }
     if !store::single_instance() {
+        // Bring the one that's running to the front instead.
+        #[cfg(windows)]
+        if tray::wake_other() {
+            return Ok(());
+        }
         eprintln!("net-watch: already running (look for it in the tray)");
         return Ok(());
     }
@@ -1006,6 +1047,15 @@ fn main() -> eframe::Result {
             "Net Watch",
             options,
             Box::new(move |cc| {
+                #[cfg(windows)]
+                {
+                    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                    if let Ok(h) = cc.window_handle()
+                        && let RawWindowHandle::Win32(w) = h.as_raw()
+                    {
+                        win::set_main_window(w.hwnd.get());
+                    }
+                }
                 let prefs = state.lock().unwrap().prefs.clone();
                 look::set_animated(prefs.animate);
                 look::set_theme(&cc.egui_ctx, theme_index(&prefs.theme));
@@ -1018,7 +1068,8 @@ fn main() -> eframe::Result {
         core.state.lock().unwrap().ctx = None;
         refresh_tray();
         // Closing the window hides it to the tray; the tray reopens it.
-        if !has_tray || core.state.lock().unwrap().quit {
+        // (On Windows the window only closes to quit.)
+        if !has_tray || core.state.lock().unwrap().quit || cfg!(windows) {
             break;
         }
         match wake.recv() {
@@ -1027,6 +1078,8 @@ fn main() -> eframe::Result {
         }
     }
     // The checker and tray threads don't need to wind down.
+    #[cfg(windows)]
+    tray::remove();
     std::process::exit(0)
 }
 

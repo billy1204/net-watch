@@ -36,12 +36,20 @@ impl Check {
 /// Default gateway from /proc/net/route. `Some(None)`: no route at all;
 /// `None`: can't tell, including a default route with no router on it (a
 /// VPN or a phone's tether), where knocking would only reach this computer.
+#[cfg(target_os = "linux")]
 pub fn gateway() -> Option<Option<[u8; 4]>> {
     let table = std::fs::read_to_string("/proc/net/route").ok()?;
     let default = table.lines().skip(1).map(|l| l.split_whitespace().collect::<Vec<_>>()).find(|f| f.get(1) == Some(&"00000000"));
     let Some(f) = default else { return Some(None) };
     let ip = u32::from_str_radix(f.get(2)?, 16).ok()?.to_le_bytes();
     (ip != [0; 4]).then_some(Some(ip))
+}
+
+/// The router on the default route with the lowest metric, as above.
+#[cfg(windows)]
+pub fn gateway() -> Option<Option<[u8; 4]>> {
+    let Some(r) = crate::win::default_routes().into_iter().next() else { return Some(None) };
+    r.router.map(|ip| Some(ip.octets()))
 }
 
 /// A TCP handshake; a refusal still proves the host answered.

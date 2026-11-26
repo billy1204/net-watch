@@ -6,7 +6,9 @@ use crate::probe::{Live, Speed};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+#[cfg(not(windows))]
+use std::process::Command;
+use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -18,12 +20,17 @@ pub const PRIVACY_URL: &str = "https://www.speedtest.net/about/privacy";
 // publish checksums, so these were taken from its files (unchanged since
 // August 2022; each matches the MD5 its server gives as the ETag). A
 // download that doesn't match isn't installed.
-#[cfg(target_arch = "aarch64")]
+#[cfg(windows)]
+const DOWNLOAD: (&str, &str) = (
+    "https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-win64.zip",
+    "13e3d888b845d301a556419e31f14ab9bff57e3f06089ef2fd3bdc9ba6841efa",
+);
+#[cfg(all(not(windows), target_arch = "aarch64"))]
 const DOWNLOAD: (&str, &str) = (
     "https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-aarch64.tgz",
     "3953d231da3783e2bf8904b6dd72767c5c6e533e163d3742fd0437affa431bd3",
 );
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(all(not(windows), not(target_arch = "aarch64")))]
 const DOWNLOAD: (&str, &str) = (
     "https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz",
     "5690596c54ff9bed63fa3732f818a05dbc2db19ad36ed68f21ca5f64d5cfeeb7",
@@ -35,7 +42,15 @@ fn time_limit() -> Duration {
     Duration::from_secs(std::env::var("NET_WATCH_TEST_LIMIT").ok().and_then(|s| s.parse().ok()).unwrap_or(120))
 }
 
+#[cfg(windows)]
+const EXE: &str = "speedtest.exe";
+#[cfg(not(windows))]
 const EXE: &str = "speedtest";
+/// What the download is saved as before it's unpacked.
+#[cfg(windows)]
+const ARCHIVE: &str = "download.zip";
+#[cfg(not(windows))]
+const ARCHIVE: &str = "download.tgz";
 
 /// Where Net Watch keeps its own copy.
 fn own_copy() -> Option<PathBuf> {
@@ -70,7 +85,7 @@ pub fn ready(prefs: &crate::store::Prefs) -> bool {
 /// Another program called `speedtest` (the old Python speedtest-cli) takes
 /// different options; Ookla's says so in its version line.
 fn is_ookla(p: &PathBuf) -> bool {
-    let out = Command::new(p).arg("--version").stdin(Stdio::null()).output();
+    let out = crate::cmd(p).arg("--version").stdin(Stdio::null()).output();
     out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("Ookla"))
 }
 
@@ -94,7 +109,7 @@ pub fn install() -> Result<PathBuf, String> {
     let dest = own_copy().ok_or("no data folder")?;
     let dir = dest.parent().unwrap().to_path_buf();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let archive = dir.join("download.tgz");
+    let archive = dir.join(ARCHIVE);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(60)))
         .build()
@@ -118,7 +133,7 @@ pub fn install() -> Result<PathBuf, String> {
     let _ = std::fs::remove_dir_all(&unpack);
     let ok = std::fs::create_dir_all(&unpack)
         .map_err(|e| e.to_string())
-        .and_then(|_| Command::new("tar").arg("-xf").arg(&archive).arg("-C").arg(&unpack).arg(EXE).status().map_err(|e| e.to_string()));
+        .and_then(|_| crate::cmd(tar()).arg("-xf").arg(&archive).arg("-C").arg(&unpack).arg(EXE).status().map_err(|e| e.to_string()));
     let _ = std::fs::remove_file(&archive);
     let unpacked = unpack.join(EXE);
     let done = match ok {
@@ -130,10 +145,26 @@ pub fn install() -> Result<PathBuf, String> {
     done
 }
 
+/// The archive tool: Windows' own, which unpacks .zip files too (a `tar`
+/// from Git for Windows earlier on the PATH doesn't).
+fn tar() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        return PathBuf::from(root).join("System32").join("tar.exe");
+    }
+    PathBuf::from("tar")
+}
+
 /// Stop the Speedtest program and anything it started, by its process id
 /// (the `Child` is busy being read from on the other thread).
+#[cfg(not(windows))]
 fn kill(pid: u32) {
     let _ = Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).status();
+}
+
+#[cfg(windows)]
+fn kill(pid: u32) {
+    let _ = crate::cmd("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).status();
 }
 
 fn num(v: &Value, path: &[&str]) -> Option<f64> {
@@ -155,9 +186,10 @@ pub fn speed_test(report: &dyn Fn(&Live)) -> Result<Speed, String> {
         return crate::probe::fake_test(35, report);
     }
     let exe = program().ok_or("Speedtest isn't installed")?;
-    let mut cmd = Command::new(exe);
+    let mut cmd = crate::cmd(exe);
     // Its own process group, so a stuck test can be stopped with anything
     // it started.
+    #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = cmd
         .args(["--format=json", "--progress=yes", "--progress-update-interval=250", "--accept-license", "--accept-gdpr"])

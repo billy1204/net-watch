@@ -5,8 +5,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-# Native Wayland + X11 windows.
-eframe = { version = "=0.36.2", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+eframe = { version = "=0.36.2", default-features = false, features = ["glow", "default_fonts"] }
 # Speed tests and the "is there a login page in the way?" check.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Local times for the log and graphs.
@@ -15,11 +14,41 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 serde_json = "1"
 # Checking the Speedtest download (already built in for ureq's rustls).
 ring = "0.17"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Native Wayland + X11 windows.
+eframe = { version = "=0.36.2", default-features = false, features = ["wayland", "x11"] }
 # Tray icon and desktop pop-ups over D-Bus.
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+
+[target.'cfg(windows)'.dependencies]
+# The window's handle, to show it again from the tray.
+raw-window-handle = "0.6"
+# The tray icon, pop-ups, the window, and the network tables (IP Helper, WLAN).
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_NetworkManagement_WiFi",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[target.'cfg(windows)'.build-dependencies]
+# The program's icon in Explorer and on the taskbar.
+winresource = "0.1"
+

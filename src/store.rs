@@ -72,18 +72,33 @@ pub struct SpeedRow {
     pub link: Option<String>,
 }
 
+#[cfg(not(windows))]
 fn base(var: &str, home_rel: &str) -> Option<PathBuf> {
     let base = std::env::var_os(var).map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(home_rel)))?;
     Some(base.join("net-watch"))
 }
 
 /// Results: ~/.local/share/net-watch.
+#[cfg(not(windows))]
 pub fn data_dir() -> Option<PathBuf> {
     std::env::var_os("NET_WATCH_DATA").map(PathBuf::from).or_else(|| base("XDG_DATA_HOME", ".local/share"))
 }
 
+#[cfg(not(windows))]
 fn config_dir() -> Option<PathBuf> {
     std::env::var_os("NET_WATCH_DATA").map(PathBuf::from).or_else(|| base("XDG_CONFIG_HOME", ".config"))
+}
+
+/// Results: %LOCALAPPDATA%\net-watch.
+#[cfg(windows)]
+pub fn data_dir() -> Option<PathBuf> {
+    std::env::var_os("NET_WATCH_DATA").map(PathBuf::from).or_else(|| Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("net-watch")))
+}
+
+/// Settings: %APPDATA%\net-watch.
+#[cfg(windows)]
+fn config_dir() -> Option<PathBuf> {
+    std::env::var_os("NET_WATCH_DATA").map(PathBuf::from).or_else(|| Some(PathBuf::from(std::env::var_os("APPDATA")?).join("net-watch")))
 }
 
 fn data_file(name: &str) -> Option<PathBuf> {

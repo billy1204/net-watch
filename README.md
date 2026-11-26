@@ -5,9 +5,11 @@ connection, and keeps a record you can show your provider when it "keeps
 dropping": every outage with when it started, how long it lasted and whether
 your own router was still answering, plus regular speed tests.
 
-A Linux network diagnostic tool: Rust, eframe/egui 0.36, a ksni tray and an
-AppImage. It reads Linux's own network files (`/proc/net`, `/sys/class/net`)
-and asks NetworkManager, so it runs on Linux only.
+A network diagnostic tool for Linux and Windows: Rust and eframe/egui 0.36.
+On Linux it reads the system's own network files (`/proc/net`,
+`/sys/class/net`), asks NetworkManager, and has a ksni tray and an AppImage.
+On Windows it reads the same things through IP Helper and the WLAN API, and
+sits in the notification area; see [On Windows](#on-windows).
 
 ![Home, with a card for each tool](docs/screenshots/home.png)
 
@@ -185,8 +187,8 @@ and publishes every result with the home IP address.
 ## Your data
 
 Everything stays on this computer, as CSV files you can open in a
-spreadsheet: `~/.local/share/net-watch` (Settings has an "Open folder"
-button).
+spreadsheet: `~/.local/share/net-watch` on Linux, `%LOCALAPPDATA%\net-watch` on
+Windows (Settings has an "Open folder" button).
 
 | File | What's in it |
 |---|---|
@@ -197,6 +199,47 @@ button).
 | `devices-<router>.csv` | Every device a scan has found on that network, with when it was first and last seen |
 
 A month of checks is about 3 MB.
+
+## On Windows
+
+Everything above works on Windows 10 and 11, with these differences:
+
+- **Tray and pop-ups**: the icon sits in the notification area (click it to
+  show or hide the window, right-click for the menu), and pop-ups come as
+  Windows notifications. Closing the window hides it there; Quit is in the
+  menu. Starting Net Watch again brings the running one to the front.
+- **Start when I log in** adds Net Watch to your sign-in programs (the
+  registry's `Run` key for your user), started hidden in the tray.
+- **Reading the network** needs no admin rights: adapters, routes and
+  neighbours come from IP Helper, Wi-Fi signal and networks from the WLAN
+  API, and ping and the route trace use Windows' own ICMP echo.
+- **Wi-Fi network names**: Windows 11 only shows them to programs when
+  location is on (Settings › Privacy & security › Location, "Let desktop
+  apps access your location"). Without it, the Wi-Fi list says so.
+- **Network changes**: joining, leaving and forgetting Wi-Fi networks need
+  no admin rights (new networks are saved for your user only). Changing an
+  adapter's address, DNS or preference, or turning a cable adapter off and
+  on, runs a short PowerShell script that Windows asks permission for each
+  time. Windows keeps those settings per adapter, not per network, and has
+  no "the router's DNS and these too": servers you choose are the only ones
+  asked. The undo-if-the-internet-doesn't-come-back safety net works the
+  same way.
+- **Firewall check** reads whether Windows Defender Firewall is on for
+  private and public networks.
+- **What's using it?** names every program, Windows' own included (shown
+  as "Windows services", "Microsoft Defender" and so on), as Windows lets
+  anyone see which program holds a connection.
+- **Device makers**: Windows has no copy of the IEEE list, so makers only
+  show if you put an `oui.csv` (the IEEE's MA-L list) in the data folder.
+- **Speed tests** use Ookla's Windows build of the same program,
+  `ookla-speedtest-1.2.0-win64.zip`, checked against its SHA-256 the same way.
+
+Build it with Rust's MSVC toolchain (the Visual Studio Build Tools with the
+Windows SDK): `cargo build --release` makes `target
+elease
+et-watch.exe`,
+a single program with nothing to install. The command-line options below
+work from a terminal too.
 
 ## Build and run
 

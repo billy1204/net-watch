@@ -1,13 +1,12 @@
 //! The "What's wrong?" check: the connection tested in order, from this
 //! computer outwards, stopping at the first step that fails, with what it
-//! means and what to try. Reads Linux's own network files where it can and
-//! runs `ping` for the rest; no admin rights needed.
+//! means and what to try. Reads the system's own network state (Linux's
+//! files, or Windows' IP Helper and WLAN API) and pings; no admin rights
+//! needed.
 use crate::probe;
 use crate::store::Time;
 use chrono::Local;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
-use std::path::Path;
-use std::process::Command;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -137,122 +136,299 @@ pub fn run(report: &dyn Fn(Step)) {
     }
 }
 
-// -- Reading Linux's files ---------------------------------------------------
+// -- Reading the system's network state -----------------------------------
 
-fn read(path: impl AsRef<Path>) -> Option<String> {
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
-}
+#[cfg(target_os = "linux")]
+mod plat {
+    use super::Ping;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+    use std::path::Path;
+    use std::process::Command;
 
-/// A real adapter (not a VPN, bridge or container's).
-fn physical(dev: &str) -> bool {
-    Path::new("/sys/class/net").join(dev).join("device").exists()
-}
-
-fn is_wifi(dev: &str) -> bool {
-    Path::new("/sys/class/net").join(dev).join("wireless").exists()
-}
-
-/// The adapters, by name.
-fn devices() -> Vec<String> {
-    let mut v: Vec<String> = std::fs::read_dir("/sys/class/net")
-        .map(|d| d.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect())
-        .unwrap_or_default();
-    v.sort();
-    v
-}
-
-/// The default route: (adapter, router), the lowest metric winning; the
-/// router is `None` when the route has none (a VPN or tether).
-fn default_route() -> Option<(String, Option<Ipv4Addr>)> {
-    let table = read("/proc/net/route")?;
-    let hex = |s: &str| u32::from_str_radix(s, 16).ok().map(|v| Ipv4Addr::from(v.to_le_bytes()));
-    table
-        .lines()
-        .skip(1)
-        .map(|l| l.split_whitespace().collect::<Vec<_>>())
-        .filter(|f| f.len() > 7 && f[1] == "00000000" && f[7] == "00000000")
-        .min_by_key(|f| f[6].parse::<u32>().unwrap_or(u32::MAX))
-        .map(|f| (f[0].to_string(), hex(f[2]).filter(|r| !r.is_unspecified())))
-}
-
-/// Wi-Fi signal in dBm, from /proc/net/wireless.
-fn signal(dev: &str) -> Option<i32> {
-    let table = read("/proc/net/wireless")?;
-    let line = table.lines().find(|l| l.trim_start().starts_with(&format!("{dev}:")))?;
-    let level = line.split_whitespace().nth(3)?.trim_end_matches('.');
-    level.parse::<f32>().ok().map(|v| v as i32).filter(|&v| v < 0)
-}
-
-/// Wi-Fi switched off by a key or airplane mode.
-fn wifi_blocked() -> bool {
-    std::fs::read_dir("/sys/class/rfkill").is_ok_and(|d| {
-        d.filter_map(|e| e.ok()).any(|e| {
-            let p = e.path();
-            read(p.join("type")).as_deref() == Some("wlan") && (read(p.join("soft")).as_deref() == Some("1") || read(p.join("hard")).as_deref() == Some("1"))
-        })
-    })
-}
-
-/// The network's name, from NetworkManager.
-fn wifi_name(dev: &str) -> Option<String> {
-    let out = Command::new("nmcli").env("LC_ALL", "C").args(["-t", "-g", "GENERAL.CONNECTION", "device", "show", dev]).output().ok()?;
-    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !name.is_empty()).then_some(name)
-}
-
-/// The router's hardware address, if it answered at the lowest level.
-fn router_mac(router: Ipv4Addr) -> Option<String> {
-    let table = read("/proc/net/arp")?;
-    table.lines().skip(1).find_map(|l| {
-        let f: Vec<&str> = l.split_whitespace().collect();
-        let answered = u32::from_str_radix(f.get(2)?.trim_start_matches("0x"), 16).ok()? & 2 != 0;
-        (answered && f[0].parse::<Ipv4Addr>().ok()? == router).then(|| f[3].to_string())
-    })
-}
-
-/// This computer's address on the way to `to`.
-fn my_address(to: Ipv4Addr) -> Option<Ipv4Addr> {
-    let s = UdpSocket::bind("0.0.0.0:0").ok()?;
-    s.connect((to, 9)).ok()?;
-    match s.local_addr().ok()? {
-        SocketAddr::V4(a) => Some(*a.ip()),
-        _ => None,
+    pub fn read(path: impl AsRef<Path>) -> Option<String> {
+        std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
     }
-}
 
-/// A public IPv6 address on `dev`.
-fn ipv6_address(dev: &str) -> Option<Ipv6Addr> {
-    let table = read("/proc/net/if_inet6")?;
-    table.lines().find_map(|l| {
-        let f: Vec<&str> = l.split_whitespace().collect();
-        // Scope 00 is global; flag 0x20 is "still being checked".
-        (f.len() == 6 && f[5] == dev && f[3] == "00").then(|| u128::from_str_radix(f[0], 16).ok().map(Ipv6Addr::from))?
-    })
-}
+    /// A real adapter (not a VPN, bridge or container's).
+    pub fn physical(dev: &str) -> bool {
+        Path::new("/sys/class/net").join(dev).join("device").exists()
+    }
 
-/// The name servers this computer asks.
-fn name_servers() -> Vec<String> {
-    let mut v: Vec<String> = read("/etc/resolv.conf")
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("nameserver").map(|s| s.trim().to_string()))
-        .collect();
-    // 127.0.0.53 is systemd-resolved passing questions on; ask it where to.
-    if v.iter().any(|s| s == "127.0.0.53")
-        && let Ok(out) = Command::new("resolvectl").env("LC_ALL", "C").arg("dns").output()
-    {
-        let up: Vec<String> = String::from_utf8_lossy(&out.stdout)
+    pub fn is_wifi(dev: &str) -> bool {
+        Path::new("/sys/class/net").join(dev).join("wireless").exists()
+    }
+
+    /// The adapters, by name.
+    pub fn devices() -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir("/sys/class/net")
+            .map(|d| d.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect())
+            .unwrap_or_default();
+        v.sort();
+        v
+    }
+
+    /// The default route: (adapter, router), the lowest metric winning; the
+    /// router is `None` when the route has none (a VPN or tether).
+    pub fn default_route() -> Option<(String, Option<Ipv4Addr>)> {
+        let table = read("/proc/net/route")?;
+        let hex = |s: &str| u32::from_str_radix(s, 16).ok().map(|v| Ipv4Addr::from(v.to_le_bytes()));
+        table
             .lines()
-            .filter_map(|l| l.split_once(':').map(|(_, s)| s.trim()))
-            .flat_map(|s| s.split_whitespace().map(str::to_string))
-            .collect();
-        if !up.is_empty() {
-            v = up;
+            .skip(1)
+            .map(|l| l.split_whitespace().collect::<Vec<_>>())
+            .filter(|f| f.len() > 7 && f[1] == "00000000" && f[7] == "00000000")
+            .min_by_key(|f| f[6].parse::<u32>().unwrap_or(u32::MAX))
+            .map(|f| (f[0].to_string(), hex(f[2]).filter(|r| !r.is_unspecified())))
+    }
+
+    /// Wi-Fi signal in dBm, from /proc/net/wireless.
+    pub fn signal(dev: &str) -> Option<i32> {
+        let table = read("/proc/net/wireless")?;
+        let line = table.lines().find(|l| l.trim_start().starts_with(&format!("{dev}:")))?;
+        let level = line.split_whitespace().nth(3)?.trim_end_matches('.');
+        level.parse::<f32>().ok().map(|v| v as i32).filter(|&v| v < 0)
+    }
+
+    /// Wi-Fi switched off by a key or airplane mode.
+    pub fn wifi_blocked() -> bool {
+        std::fs::read_dir("/sys/class/rfkill").is_ok_and(|d| {
+            d.filter_map(|e| e.ok()).any(|e| {
+                let p = e.path();
+                read(p.join("type")).as_deref() == Some("wlan") && (read(p.join("soft")).as_deref() == Some("1") || read(p.join("hard")).as_deref() == Some("1"))
+            })
+        })
+    }
+
+    /// The network's name, from NetworkManager.
+    pub fn wifi_name(dev: &str) -> Option<String> {
+        let out = Command::new("nmcli").env("LC_ALL", "C").args(["-t", "-g", "GENERAL.CONNECTION", "device", "show", dev]).output().ok()?;
+        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !name.is_empty()).then_some(name)
+    }
+
+    /// The router's hardware address, if it answered at the lowest level.
+    pub fn router_mac(router: Ipv4Addr) -> Option<String> {
+        let table = read("/proc/net/arp")?;
+        table.lines().skip(1).find_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let answered = u32::from_str_radix(f.get(2)?.trim_start_matches("0x"), 16).ok()? & 2 != 0;
+            (answered && f[0].parse::<Ipv4Addr>().ok()? == router).then(|| f[3].to_string())
+        })
+    }
+
+    /// This computer's address on the way to `to`.
+    pub fn my_address(to: Ipv4Addr) -> Option<Ipv4Addr> {
+        let s = UdpSocket::bind("0.0.0.0:0").ok()?;
+        s.connect((to, 9)).ok()?;
+        match s.local_addr().ok()? {
+            SocketAddr::V4(a) => Some(*a.ip()),
+            _ => None,
         }
     }
-    v.dedup();
-    v
+
+    /// A public IPv6 address on `dev`.
+    pub fn ipv6_address(dev: &str) -> Option<Ipv6Addr> {
+        let table = read("/proc/net/if_inet6")?;
+        table.lines().find_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            // Scope 00 is global; flag 0x20 is "still being checked".
+            (f.len() == 6 && f[5] == dev && f[3] == "00").then(|| u128::from_str_radix(f[0], 16).ok().map(Ipv6Addr::from))?
+        })
+    }
+
+    /// The name servers this computer asks.
+    pub fn name_servers() -> Vec<String> {
+        let mut v: Vec<String> = read("/etc/resolv.conf")
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("nameserver").map(|s| s.trim().to_string()))
+            .collect();
+        // 127.0.0.53 is systemd-resolved passing questions on; ask it where to.
+        if v.iter().any(|s| s == "127.0.0.53")
+            && let Ok(out) = Command::new("resolvectl").env("LC_ALL", "C").arg("dns").output()
+        {
+            let up: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter_map(|l| l.split_once(':').map(|(_, s)| s.trim()))
+                .flat_map(|s| s.split_whitespace().map(str::to_string))
+                .collect();
+            if !up.is_empty() {
+                v = up;
+            }
+        }
+        v.dedup();
+        v
+    }
+
+    /// The adapter has a link (a cable in, or on a Wi-Fi network).
+    pub fn oper_up(dev: &str) -> bool {
+        read(format!("/sys/class/net/{dev}/operstate")).as_deref() == Some("up")
+    }
+
+    /// Link speed in Mbps, when it's known.
+    pub fn link_speed(dev: &str) -> Option<i32> {
+        read(format!("/sys/class/net/{dev}/speed")).and_then(|s| s.parse::<i32>().ok()).filter(|&s| s > 0)
+    }
+
+    pub fn mtu(dev: &str) -> Option<String> {
+        read(format!("/sys/class/net/{dev}/mtu"))
+    }
+
+    pub fn mac(dev: &str) -> Option<String> {
+        read(format!("/sys/class/net/{dev}/address"))
+    }
+
+    /// `count` pings to `ip`, 0.2 s apart (the quickest allowed without admin
+    /// rights); `None` when `ping` couldn't run.
+    pub fn ping(ip: IpAddr, count: u32, extra: &[&str]) -> Option<Ping> {
+        let out = Command::new("ping")
+            .env("LC_ALL", "C")
+            .args(["-n", "-q", "-i", "0.2", "-W", "1", "-w", "4", "-c"])
+            .arg(count.to_string())
+            .args(extra)
+            .arg(ip.to_string())
+            .output()
+            .ok()?;
+        super::parse_ping(&String::from_utf8_lossy(&out.stdout))
+    }
 }
+
+#[cfg(windows)]
+mod plat {
+    use super::Ping;
+    use crate::win;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+    use std::time::Duration;
+
+    fn find(dev: &str) -> Option<win::Adapter> {
+        win::adapters().into_iter().find(|a| a.name == dev)
+    }
+
+    /// A real Ethernet or Wi-Fi adapter (not a VPN's or a virtual switch's).
+    pub fn physical(dev: &str) -> bool {
+        find(dev).is_some_and(|a| a.physical && (a.ethernet() || a.wifi()))
+    }
+
+    pub fn is_wifi(dev: &str) -> bool {
+        find(dev).is_some_and(|a| a.wifi())
+    }
+
+    /// The adapters, by name.
+    pub fn devices() -> Vec<String> {
+        let mut v: Vec<String> = win::adapters().into_iter().filter(|a| a.ethernet() || a.wifi() || a.physical).map(|a| a.name).collect();
+        v.sort();
+        v
+    }
+
+    /// The default route: (adapter, router), the lowest metric winning; the
+    /// router is `None` when the route has none (a VPN or tether).
+    pub fn default_route() -> Option<(String, Option<Ipv4Addr>)> {
+        let r = win::default_routes().into_iter().next()?;
+        let name = win::adapters().into_iter().find(|a| a.luid == r.luid).map(|a| a.name)?;
+        Some((name, r.router))
+    }
+
+    pub fn oper_up(dev: &str) -> bool {
+        find(dev).is_some_and(|a| a.up)
+    }
+
+    pub fn link_speed(dev: &str) -> Option<i32> {
+        find(dev).map(|a| (a.speed / 1_000_000) as i32).filter(|&s| s > 0)
+    }
+
+    pub fn mtu(dev: &str) -> Option<String> {
+        find(dev).map(|a| a.mtu.to_string())
+    }
+
+    pub fn mac(dev: &str) -> Option<String> {
+        find(dev).map(|a| a.mac).filter(|m| !m.is_empty())
+    }
+
+    /// Wi-Fi signal in dBm.
+    pub fn signal(dev: &str) -> Option<i32> {
+        let a = find(dev)?;
+        let w = win::Wlan::open()?;
+        let g = w.find(&a.guid)?;
+        w.rssi(&g)
+    }
+
+    /// Wi-Fi switched off: airplane mode, or a key or switch.
+    pub fn wifi_blocked() -> bool {
+        let Some(w) = win::Wlan::open() else { return false };
+        w.interfaces().iter().any(|(g, _)| w.radio_off(g))
+    }
+
+    /// The network's name.
+    pub fn wifi_name(dev: &str) -> Option<String> {
+        let a = find(dev)?;
+        let w = win::Wlan::open()?;
+        let c = w.current(&w.find(&a.guid)?)?;
+        Some(if c.ssid.is_empty() { c.profile } else { c.ssid }).filter(|n| !n.is_empty())
+    }
+
+    /// The router's hardware address, if it answered at the lowest level.
+    pub fn router_mac(router: Ipv4Addr) -> Option<String> {
+        win::neighbours().into_iter().find(|n| n.0 == router).map(|n| n.1)
+    }
+
+    /// This computer's address on the way to `to`.
+    pub fn my_address(to: Ipv4Addr) -> Option<Ipv4Addr> {
+        let s = UdpSocket::bind("0.0.0.0:0").ok()?;
+        s.connect((to, 9)).ok()?;
+        match s.local_addr().ok()? {
+            SocketAddr::V4(a) => Some(*a.ip()),
+            _ => None,
+        }
+    }
+
+    /// A public IPv6 address on `dev`.
+    pub fn ipv6_address(dev: &str) -> Option<Ipv6Addr> {
+        find(dev)?.v6.first().copied()
+    }
+
+    /// The name servers this computer asks: those of the adapter the
+    /// internet goes through.
+    pub fn name_servers() -> Vec<String> {
+        let all = win::adapters();
+        let main = win::default_routes().into_iter().next().and_then(|r| all.iter().find(|a| a.luid == r.luid).cloned());
+        let mut v: Vec<String> = match main {
+            Some(a) => a.dns.iter().map(|ip| ip.to_string()).collect(),
+            None => all.iter().filter(|a| a.up).flat_map(|a| a.dns.iter().map(|ip| ip.to_string())).collect(),
+        };
+        let mut seen = std::collections::HashSet::new();
+        v.retain(|s| seen.insert(s.clone()));
+        v
+    }
+
+    /// `count` pings to `ip`, 0.2 s apart, each given a second to answer.
+    /// `extra` takes Linux ping's "-s size" and "-M do" (don't split it).
+    pub fn ping(ip: IpAddr, count: u32, extra: &[&str]) -> Option<Ping> {
+        let IpAddr::V4(to) = ip else { return None };
+        let size = extra.iter().position(|a| *a == "-s").and_then(|i| extra.get(i + 1)?.parse().ok()).unwrap_or(56u16);
+        let df = extra.contains(&"do");
+        let times: Vec<Option<f32>> = std::thread::scope(|s| {
+            let jobs: Vec<_> = (0..count)
+                .map(|i| {
+                    s.spawn(move || {
+                        std::thread::sleep(Duration::from_millis(200 * i as u64));
+                        match win::echo(to, 128, size, df, Duration::from_secs(1)) {
+                            win::Echo::Reply(d) => Some(d.as_secs_f32() * 1000.0),
+                            _ => None,
+                        }
+                    })
+                })
+                .collect();
+            jobs.into_iter().map(|j| j.join().ok().flatten()).collect()
+        });
+        let got: Vec<f32> = times.into_iter().flatten().collect();
+        let avg = (!got.is_empty()).then(|| got.iter().sum::<f32>() / got.len() as f32);
+        let max = got.iter().copied().reduce(f32::max);
+        Some(Ping { sent: count, got: got.len() as u32, avg_ms: avg, max_ms: max })
+    }
+}
+
+use plat::*;
+pub use plat::ping;
 
 // -- Ping --------------------------------------------------------------------
 
@@ -269,20 +445,7 @@ impl Ping {
     }
 }
 
-/// `count` pings to `ip`, 0.2 s apart (the quickest allowed without admin
-/// rights); `None` when `ping` couldn't run.
-pub fn ping(ip: IpAddr, count: u32, extra: &[&str]) -> Option<Ping> {
-    let out = Command::new("ping")
-        .env("LC_ALL", "C")
-        .args(["-n", "-q", "-i", "0.2", "-W", "1", "-w", "4", "-c"])
-        .arg(count.to_string())
-        .args(extra)
-        .arg(ip.to_string())
-        .output()
-        .ok()?;
-    parse_ping(&String::from_utf8_lossy(&out.stdout))
-}
-
+#[cfg_attr(windows, allow(dead_code))]
 fn parse_ping(text: &str) -> Option<Ping> {
     // "5 packets transmitted, 5 received, 0% packet loss, time 803ms"
     let counts = text.lines().find(|l| l.contains("packets transmitted"))?;
@@ -307,12 +470,12 @@ fn link(f: &mut Found) -> Step {
     let name = STEPS[0];
     let route = default_route();
     let devs: Vec<String> = devices().into_iter().filter(|d| physical(d)).collect();
-    let up = |d: &String| read(format!("/sys/class/net/{d}/operstate")).as_deref() == Some("up");
+    let up = |d: &String| oper_up(d);
     // The adapter the internet goes through, else any that's connected.
     let dev = route.as_ref().map(|r| r.0.clone()).filter(|d| physical(d) && up(d)).or_else(|| devs.iter().find(|d| up(d)).cloned());
     let Some(dev) = dev else {
         let mut s = if devs.is_empty() {
-            Step::new(name, Mark::Fail, "This computer has no network adapter that Linux can use.")
+            Step::new(name, Mark::Fail, "This computer has no network adapter it can use.")
                 .fix("Check the adapter is plugged in (for a USB one) and that its driver is installed.", None)
         } else if wifi_blocked() && devs.iter().any(|d| is_wifi(d)) {
             Step::new(name, Mark::Fail, "Wi-Fi is switched off.")
@@ -338,8 +501,7 @@ fn link(f: &mut Found) -> Step {
             _ => Step::new(name, Mark::Pass, format!("On {net} with a good signal.")),
         }
     } else {
-        let speed = read(format!("/sys/class/net/{dev}/speed")).and_then(|s| s.parse::<i32>().ok()).filter(|&s| s > 0);
-        match speed {
+        match link_speed(&dev) {
             Some(mbps) if mbps < 1000 => Step::new(name, Mark::Warn, format!("On a cable, but it only connects at {mbps} Mbps."))
                 .fix("A cable or port that's worn or the wrong kind holds it back: try another cable (Cat 5e or better) or router port.", None),
             _ => Step::new(name, Mark::Pass, "On a network cable."),
@@ -349,13 +511,13 @@ fn link(f: &mut Found) -> Step {
     if let Some(dbm) = f.wifi.then(|| signal(&dev)).flatten() {
         s.detail("Signal", format!("{dbm} dBm (above -67 is good, below -75 is weak)"));
     }
-    if let Some(mbps) = read(format!("/sys/class/net/{dev}/speed")).filter(|_| !f.wifi).filter(|s| !s.starts_with('-')) {
+    if let Some(mbps) = link_speed(&dev).filter(|_| !f.wifi) {
         s.detail("Link speed", format!("{mbps} Mbps"));
     }
-    if let Some(mtu) = read(format!("/sys/class/net/{dev}/mtu")) {
+    if let Some(mtu) = mtu(&dev) {
         s.detail("Packet size (MTU)", mtu);
     }
-    if let Some(mac) = read(format!("/sys/class/net/{dev}/address")) {
+    if let Some(mac) = mac(&dev) {
         s.detail("Hardware address", mac);
     }
     f.iface = Some(dev);

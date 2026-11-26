@@ -124,7 +124,7 @@ impl Edit {
             i => (DNS[i].1.iter().map(|s| s.to_string()).collect(), true),
         };
         if self.prefer != (0..100).contains(&self.base.metric) {
-            p.metric = if self.prefer { 50 } else { -1 };
+            p.metric = if self.prefer { crate::netif::PREFER_METRIC } else { -1 };
         }
         Ok(p)
     }
@@ -217,7 +217,7 @@ impl Tool for Network {
                 let text = match other {
                     None => "Looking at this computer's network adapters…".to_string(),
                     Some(Err(e)) => format!("Couldn't read the network adapters: {e}."),
-                    Some(Ok(_)) => "This computer has no Ethernet or Wi-Fi adapters NetworkManager can use.".into(),
+                    Some(Ok(_)) => if cfg!(windows) { "This computer has no Ethernet or Wi-Fi adapters." } else { "This computer has no Ethernet or Wi-Fi adapters NetworkManager can use." }.into(),
                 };
                 look::card(ui, |ui| ui.label(egui::RichText::new(text).color(pal().weak)));
                 return;
@@ -264,7 +264,7 @@ impl Network {
             }
         }
         look::card(ui, |ui| {
-            ui.label(look::caption(&format!("{} · {}", a.dev, a.kind.word())));
+            ui.label(look::caption(&[dev_name(a), a.kind.word()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ")));
             row(ui, "Use this adapter", &power_note(a, st.prefs.undo_secs), &mut |ui| {
                 if a.unavailable() {
                     return;
@@ -341,9 +341,12 @@ impl Network {
                     (Kind::Wifi, None) => "Joins this network whenever it's in range".into(),
                     (Kind::Ethernet, _) => "Connects when a cable is plugged in".into(),
                 };
-                row(ui, "Connect on its own", &auto_note, &mut |ui| {
-                    look::toggle(ui, &mut edit.auto);
-                });
+                // Windows always connects a cable that's plugged in.
+                if !(cfg!(windows) && a.kind == Kind::Ethernet) {
+                    row(ui, "Connect on its own", &auto_note, &mut |ui| {
+                        look::toggle(ui, &mut edit.auto);
+                    });
+                }
                 row(ui, "Prefer this connection", "When cable and Wi-Fi are both connected, the internet goes this way", &mut |ui| {
                     look::toggle(ui, &mut edit.prefer);
                 });
@@ -511,7 +514,7 @@ impl Network {
                     ui.label(weak("Saved: no password needed"));
                 });
             } else if n.enterprise() {
-                ui.label(weak("Needs a user name and certificates, as at work or school. Use the desktop's own Wi-Fi settings for this one."));
+                ui.label(weak(if cfg!(windows) { "Needs a user name and certificates, as at work or school. Use Windows' own Wi-Fi settings for this one." } else { "Needs a user name and certificates, as at work or school. Use the desktop's own Wi-Fi settings for this one." }));
             } else if n.open() {
                 ui.horizontal(|ui| {
                     if look::button(ui, "Connect", true, true).clicked() {
@@ -611,7 +614,7 @@ fn adapter_box(ui: &mut egui::Ui, a: &Adapter, chosen: bool) -> egui::Response {
                 (_, s) if s.starts_with("connecting") => "connecting…".into(),
                 _ => "not connected".into(),
             };
-            let line = [a.dev.as_str(), a.model.as_str(), state.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
+            let line = [dev_name(a), a.model.as_str(), state.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
             ui.add(egui::Label::new(egui::RichText::new(&line).small().color(pal().weak)).truncate());
             line
         });
@@ -721,8 +724,14 @@ fn speed_word(mbps: u32) -> String {
 
 /// The adapter's name and what's useful after it: link speed, or the
 /// Wi-Fi network and signal.
+/// The adapter's own name, unless it only says what kind it is (Windows
+/// calls its adapters "Wi-Fi" and "Ethernet").
+fn dev_name(a: &Adapter) -> &str {
+    if a.dev.eq_ignore_ascii_case(a.kind.word()) || (a.kind == Kind::Wifi && a.dev.eq_ignore_ascii_case("WiFi")) { "" } else { &a.dev }
+}
+
 fn detail(a: &Adapter) -> String {
-    format!("{} · {}", a.dev, detail_tail(a)).trim_end_matches(" · ").to_string()
+    [dev_name(a), detail_tail(a).as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ")
 }
 
 fn detail_tail(a: &Adapter) -> String {

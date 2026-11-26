@@ -5,6 +5,7 @@
 use crate::diag::{self, ms};
 use crate::store::Time;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
+#[cfg(target_os = "linux")]
 use std::process::Command;
 use std::time::Duration;
 
@@ -225,6 +226,7 @@ enum Reply {
     Nothing,
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn parse_reply(text: &str, to: Ipv4Addr) -> Reply {
     for line in text.lines() {
         // "From 192.168.1.254 icmp_seq=1 Time to live exceeded"
@@ -241,6 +243,18 @@ fn parse_reply(text: &str, to: Ipv4Addr) -> Reply {
     Reply::Nothing
 }
 
+/// One echo that can go `ttl` hops; Windows sends it itself, with no
+/// admin rights needed.
+#[cfg(windows)]
+fn probe(to: Ipv4Addr, ttl: u8) -> Reply {
+    match crate::win::echo(to, ttl, 56, false, Duration::from_secs(1)) {
+        crate::win::Echo::Reply(_) => Reply::Arrived,
+        crate::win::Echo::Hop(ip) => Reply::Hop(ip),
+        _ => Reply::Nothing,
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn probe(to: Ipv4Addr, ttl: u8) -> Reply {
     let out = Command::new("ping")
         .env("LC_ALL", "C")
@@ -294,6 +308,17 @@ fn find_hops(to: Ipv4Addr) -> Vec<Option<Ipv4Addr>> {
 }
 
 /// This computer's own name server, when it's an IPv4 one.
+#[cfg(windows)]
+fn name_server() -> Option<Ipv4Addr> {
+    let all = crate::win::adapters();
+    let main = crate::win::default_routes().into_iter().next()?;
+    all.iter().find(|a| a.luid == main.luid)?.dns.iter().find_map(|ip| match ip {
+        IpAddr::V4(v) => Some(*v),
+        _ => None,
+    })
+}
+
+#[cfg(target_os = "linux")]
 fn name_server() -> Option<Ipv4Addr> {
     std::fs::read_to_string("/etc/resolv.conf")
         .ok()?

@@ -1,13 +1,27 @@
-//! The computer's network adapters, through NetworkManager's `nmcli`: what
-//! each one is, its settings and the Wi-Fi networks nearby; and changing
-//! them, with the old settings put back if the internet doesn't come back.
+//! The computer's network adapters: what each one is, its settings and the
+//! Wi-Fi networks nearby; and changing them, with the old settings put back
+//! if the internet doesn't come back. Through NetworkManager's `nmcli` on
+//! Linux (`netif_nm.rs`), and IP Helper, the WLAN API and PowerShell on
+//! Windows (`netif_win.rs`).
 use crate::monitor::Core;
 use crate::store::Time;
 use chrono::Local;
-use std::io::Write;
 use std::net::{Ipv4Addr, TcpStream, ToSocketAddrs};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+
+#[cfg(target_os = "linux")]
+#[path = "netif_nm.rs"]
+mod backend;
+#[cfg(windows)]
+#[path = "netif_win.rs"]
+mod backend;
+
+/// The route metric "Prefer this connection" sets: below what the system
+/// gives adapters of its own accord.
+#[cfg(target_os = "linux")]
+pub const PREFER_METRIC: i64 = 50;
+#[cfg(windows)]
+pub const PREFER_METRIC: i64 = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -26,7 +40,7 @@ impl Kind {
 
 #[derive(Clone, Debug)]
 pub struct Adapter {
-    /// Its name to Linux, like "enp6s0".
+    /// Its name to the system, like "enp6s0" or "Wi-Fi".
     pub dev: String,
     pub kind: Kind,
     /// NetworkManager's word: "connected", "disconnected", "unavailable"
@@ -204,7 +218,7 @@ pub fn run(core: &Core, what: Do) {
 }
 
 fn refresh(core: &Core) {
-    let found = adapters();
+    let found = backend::adapters();
     core.state.lock().unwrap().net.adapters = Some(found);
     core.repaint();
 }
@@ -214,7 +228,7 @@ fn scan(core: &Core, dev: &str, rescan: bool) {
         return;
     }
     core.repaint();
-    let saved = saved_wifi();
+    let saved = backend::saved_wifi();
     let mark = |found: Result<Vec<WifiNet>, String>| {
         found.map(|mut list| {
             for n in &mut list {
@@ -224,11 +238,11 @@ fn scan(core: &Core, dev: &str, rescan: bool) {
         })
     };
     // What it saw last, at once; then a fresh look, which takes a few seconds.
-    if rescan && let Ok(quick) = networks(dev, false) {
+    if rescan && let Ok(quick) = backend::networks(dev, false) {
         core.state.lock().unwrap().net.wifi = Some((dev.to_string(), mark(Ok(quick)), Local::now()));
         core.repaint();
     }
-    let found = mark(networks(dev, rescan));
+    let found = mark(backend::networks(dev, rescan));
     let mut st = core.state.lock().unwrap();
     st.net.wifi = Some((dev.to_string(), found, Local::now()));
     st.net.scanning = false;
@@ -249,16 +263,16 @@ fn change(core: &Core, what: Do) {
         list.iter().find(|a| a.dev == dev && a.active).and_then(|a| a.profile.as_ref()).map(|p| p.uuid.clone())
     };
     let back_to = |dev: String, prev: Option<String>| move || match prev {
-        Some(uuid) => nmcli(&["-w", "30", "connection", "up", &uuid, "ifname", &dev]).map(drop),
-        None => nmcli(&["device", "disconnect", &dev]).map(drop),
+        Some(uuid) => backend::up(&uuid, &dev),
+        None => backend::disconnect(&dev),
     };
     match what {
         Do::Apply { dev, old, new, active, primary } => {
             let apply = {
                 let (dev, new) = (dev.clone(), new.clone());
-                move || save_profile(&new, active.then_some(dev.as_str()))
+                move || backend::save_profile(&new, active.then_some(dev.as_str()))
             };
-            let undo = move || save_profile(&old, active.then_some(dev.as_str()));
+            let undo = move || backend::save_profile(&old, active.then_some(dev.as_str()));
             if active && primary {
                 trial(core, format!("the new settings for {}", new.name), apply, undo);
             } else {
@@ -272,11 +286,11 @@ fn change(core: &Core, what: Do) {
                 let (dev, created) = (dev.clone(), created.clone());
                 let ssid = ssid.clone();
                 move || match saved {
-                    Some(uuid) => nmcli(&["-w", "30", "connection", "up", &uuid, "ifname", &dev]).map(drop),
+                    Some(uuid) => backend::up(&uuid, &dev),
                     None => {
-                        let uuid = add_wifi(&dev, &ssid, &security, &password, auto, hidden)?;
+                        let uuid = backend::add_wifi(&dev, &ssid, &security, &password, auto, hidden)?;
                         *created.lock().unwrap() = Some(uuid.clone());
-                        nmcli(&["-w", "30", "connection", "up", &uuid, "ifname", &dev]).map(drop)
+                        backend::up(&uuid, &dev)
                     }
                 }
             };
@@ -285,7 +299,7 @@ fn change(core: &Core, what: Do) {
                 move || {
                     // A new network that didn't work isn't kept.
                     if let Some(uuid) = created.lock().unwrap().take() {
-                        let _ = nmcli(&["connection", "delete", &uuid]);
+                        let _ = backend::delete(&uuid);
                     }
                     back()
                 }
@@ -297,7 +311,7 @@ fn change(core: &Core, what: Do) {
             let prev = previous(&dev);
             let apply = {
                 let dev = dev.clone();
-                move || nmcli(&["device", "disconnect", &dev]).map(drop)
+                move || backend::disconnect(&dev)
             };
             if primary {
                 trial(core, format!("turning off {dev}"), apply, back_to(dev, prev));
@@ -305,8 +319,8 @@ fn change(core: &Core, what: Do) {
                 quietly(core, "Turning it off…", "Turned off.", apply);
             }
         }
-        Do::Connect(dev) => quietly(core, "Turning it on…", "Turned on.", move || nmcli(&["-w", "30", "device", "connect", &dev]).map(drop)),
-        Do::Forget(uuid, name) => quietly(core, "Forgetting…", &format!("Forgot {name}."), move || nmcli(&["connection", "delete", &uuid]).map(drop)),
+        Do::Connect(dev) => quietly(core, "Turning it on…", "Turned on.", move || backend::connect(&dev)),
+        Do::Forget(uuid, name) => quietly(core, "Forgetting…", &format!("Forgot {name}."), move || backend::delete(&uuid)),
         _ => {}
     }
     refresh(core);
@@ -396,284 +410,7 @@ fn online() -> Option<u64> {
 }
 
 fn is_primary(dev: &str) -> bool {
-    primary_dev().as_deref() == Some(dev)
-}
-
-/// The adapter the internet goes through: the default route with the
-/// lowest metric.
-fn primary_dev() -> Option<String> {
-    let table = std::fs::read_to_string("/proc/net/route").ok()?;
-    table
-        .lines()
-        .skip(1)
-        .filter_map(|l| {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            (f.len() > 7 && f[1] == "00000000" && f[7] == "00000000").then(|| (f[6].parse::<u32>().unwrap_or(u32::MAX), f[0].to_string()))
-        })
-        .min()
-        .map(|(_, dev)| dev)
-}
-
-pub fn adapters() -> Result<Vec<Adapter>, String> {
-    let list = nmcli(&["-t", "-f", "DEVICE,TYPE,STATE,CON-UUID", "device"])?;
-    let primary = primary_dev();
-    let mut found = Vec::new();
-    for line in list.lines() {
-        let f = fields(line);
-        if f.len() < 4 {
-            continue;
-        }
-        let kind = match f[1].as_str() {
-            "ethernet" => Kind::Ethernet,
-            "wifi" => Kind::Wifi,
-            _ => continue,
-        };
-        let dev = f[0].clone();
-        let info = keyed(&nmcli(&["-t", "-f", "GENERAL.VENDOR,GENERAL.PRODUCT,GENERAL.HWADDR,IP4.ADDRESS,IP4.GATEWAY,IP4.DNS", "device", "show", &dev]).unwrap_or_default());
-        let get = |k: &str| info.iter().find(|(key, _)| key == k || key.starts_with(&format!("{k}["))).map(|(_, v)| v.clone()).filter(|v| !v.is_empty() && v != "--");
-        let sys = |what: &str| std::fs::read_to_string(format!("/sys/class/net/{dev}/{what}")).ok().and_then(|s| s.trim().parse::<i64>().ok());
-        let active = !f[3].is_empty();
-        let profile = if active { profile(&f[3]).ok() } else if kind == Kind::Ethernet { spare_ethernet(&dev) } else { None };
-        let wifi = if kind == Kind::Wifi && active { networks(&dev, false).ok().and_then(|n| n.into_iter().find(|n| n.in_use)) } else { None };
-        found.push(Adapter {
-            kind,
-            state: f[2].clone(),
-            model: model(get("GENERAL.VENDOR").unwrap_or_default(), get("GENERAL.PRODUCT").unwrap_or_default()),
-            mac: get("GENERAL.HWADDR").unwrap_or_default(),
-            profile,
-            active,
-            address: get("IP4.ADDRESS"),
-            gateway: get("IP4.GATEWAY"),
-            dns: info.iter().filter(|(k, _)| k.starts_with("IP4.DNS")).map(|(_, v)| v.clone()).collect(),
-            speed: sys("speed").filter(|s| *s > 0).map(|s| s as u32),
-            mtu: sys("mtu").map(|m| m as u32),
-            primary: primary.as_deref() == Some(dev.as_str()),
-            wifi,
-            dev,
-        });
-    }
-    // The one in use first, then Ethernet, then by name.
-    found.sort_by_key(|a| (!a.primary, !a.connected(), a.kind != Kind::Ethernet, a.dev.clone()));
-    Ok(found)
-}
-
-/// "MEDIATEK Corp." and "MT7922 802.11ax PCI Express Wireless Network
-/// Adapter" make "MediaTek MT7922".
-fn model(vendor: String, product: String) -> String {
-    let vendor = vendor.split([' ', ',']).next().unwrap_or("").to_string();
-    let vendor = match vendor.to_lowercase().as_str() {
-        "mediatek" => "MediaTek".into(),
-        "intel" => "Intel".into(),
-        "realtek" => "Realtek".into(),
-        "qualcomm" => "Qualcomm".into(),
-        "broadcom" => "Broadcom".into(),
-        _ => vendor,
-    };
-    let product = product.split_whitespace().next().unwrap_or("");
-    let product = product.trim_start_matches(&vendor).trim();
-    format!("{vendor} {product}").trim().to_string()
-}
-
-/// For an Ethernet adapter with nothing plugged in: the wired settings it
-/// would use.
-fn spare_ethernet(dev: &str) -> Option<Profile> {
-    let list = nmcli(&["-t", "-f", "UUID,TYPE", "connection", "show"]).ok()?;
-    list.lines().map(fields).filter(|f| f.len() >= 2 && f[1] == "802-3-ethernet").find_map(|f| {
-        let bound = nmcli(&["-g", "connection.interface-name", "connection", "show", &f[0]]).ok()?;
-        let bound = bound.trim();
-        if bound.is_empty() || bound == dev { profile(&f[0]).ok() } else { None }
-    })
-}
-
-pub fn profile(uuid: &str) -> Result<Profile, String> {
-    let text = nmcli(&[
-        "-t",
-        "-f",
-        "connection.id,connection.uuid,connection.autoconnect,ipv4.method,ipv4.addresses,ipv4.gateway,ipv4.dns,ipv4.ignore-auto-dns,ipv4.route-metric",
-        "connection",
-        "show",
-        uuid,
-    ])?;
-    let kv = keyed(&text);
-    let get = |k: &str| kv.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).filter(|v| v != "--").unwrap_or_default();
-    let list = |k: &str| get(k).split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect::<Vec<_>>();
-    Ok(Profile {
-        uuid: get("connection.uuid"),
-        name: get("connection.id"),
-        manual: get("ipv4.method") == "manual",
-        address: list("ipv4.addresses").into_iter().next().unwrap_or_default(),
-        gateway: get("ipv4.gateway"),
-        dns: list("ipv4.dns"),
-        ignore_auto_dns: get("ipv4.ignore-auto-dns") == "yes",
-        autoconnect: get("connection.autoconnect") != "no",
-        metric: get("ipv4.route-metric").parse().unwrap_or(-1),
-    })
-}
-
-/// Save `p`, and when `dev` is given (it's in use there) bring it in now.
-fn save_profile(p: &Profile, dev: Option<&str>) -> Result<(), String> {
-    let yes = |b: bool| if b { "yes" } else { "no" };
-    let dns = p.dns.join(",");
-    let metric = p.metric.to_string();
-    let (address, gateway) = if p.manual { (p.address.as_str(), p.gateway.as_str()) } else { ("", "") };
-    nmcli(&[
-        "connection",
-        "modify",
-        &p.uuid,
-        "ipv4.method",
-        if p.manual { "manual" } else { "auto" },
-        "ipv4.addresses",
-        address,
-        "ipv4.gateway",
-        gateway,
-        "ipv4.dns",
-        &dns,
-        "ipv4.ignore-auto-dns",
-        yes(p.ignore_auto_dns),
-        "connection.autoconnect",
-        yes(p.autoconnect),
-        "ipv4.route-metric",
-        &metric,
-    ])?;
-    if let Some(dev) = dev {
-        // Gently if it can; some changes need the connection restarted.
-        if nmcli(&["device", "reapply", dev]).is_err() {
-            nmcli(&["-w", "30", "connection", "up", &p.uuid, "ifname", dev])?;
-        }
-    }
-    Ok(())
-}
-
-/// Save a new Wi-Fi network; the password goes in through the editor's
-/// input, so it never shows in the list of running programs. Its id.
-fn add_wifi(dev: &str, ssid: &str, security: &str, password: &str, auto: bool, hidden: bool) -> Result<String, String> {
-    let key_mgmt = if security.contains("802.1X") {
-        return Err("this network needs a user name and certificates; use the desktop's own Wi-Fi settings".into());
-    } else if security.contains("WEP") {
-        return Err("this network uses old WEP security, which isn't supported".into());
-    } else if security.is_empty() && password.is_empty() {
-        None
-    } else if security.contains("WPA3") && !security.contains("WPA2") {
-        Some("sae")
-    } else {
-        Some("wpa-psk")
-    };
-    let mut args = vec!["connection", "add", "type", "wifi", "ifname", dev, "con-name", ssid, "ssid", ssid];
-    args.extend(["connection.autoconnect", if auto { "yes" } else { "no" }]);
-    if hidden {
-        args.extend(["802-11-wireless.hidden", "yes"]);
-    }
-    if let Some(k) = key_mgmt {
-        args.extend(["802-11-wireless-security.key-mgmt", k]);
-    }
-    let out = nmcli(&args)?;
-    // "Connection 'Name' (uuid) successfully added."
-    let uuid = out.rsplit_once('(').and_then(|(_, r)| r.split_once(')')).map(|(u, _)| u.to_string()).ok_or("couldn't save the network")?;
-    if key_mgmt.is_some() {
-        if password.contains('\n') {
-            let _ = nmcli(&["connection", "delete", &uuid]);
-            return Err("the password can't have a line break in it".into());
-        }
-        let script = format!("set 802-11-wireless-security.psk {password}\nsave persistent\nquit\n");
-        if let Err(e) = nmcli_input(&["connection", "edit", &uuid], &script) {
-            let _ = nmcli(&["connection", "delete", &uuid]);
-            return Err(e);
-        }
-    }
-    Ok(uuid)
-}
-
-/// The Wi-Fi networks `dev` can see, strongest first; `rescan` looks again
-/// (a few seconds) rather than using what it saw last. Not marked saved.
-pub fn networks(dev: &str, rescan: bool) -> Result<Vec<WifiNet>, String> {
-    let text = nmcli(&["-t", "-f", "IN-USE,SSID,SECURITY,FREQ,SIGNAL", "device", "wifi", "list", "ifname", dev, "--rescan", if rescan { "yes" } else { "no" }])?;
-    let mut found: Vec<WifiNet> = Vec::new();
-    for f in text.lines().map(fields) {
-        if f.len() < 5 || f[1].is_empty() {
-            continue;
-        }
-        let net = WifiNet {
-            ssid: f[1].clone(),
-            security: if f[2] == "--" { String::new() } else { f[2].clone() },
-            freq: f[3].split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(0),
-            signal: f[4].parse().unwrap_or(0),
-            in_use: f[0] == "*",
-            saved: None,
-        };
-        // One line per name: the strongest, or the one in use.
-        match found.iter_mut().find(|n| n.ssid == net.ssid) {
-            Some(n) if net.in_use || (!n.in_use && net.signal > n.signal) => *n = net,
-            Some(_) => {}
-            None => found.push(net),
-        }
-    }
-    found.sort_by_key(|n| (!n.in_use, std::cmp::Reverse(n.signal)));
-    Ok(found)
-}
-
-/// Saved Wi-Fi networks: name and settings id.
-fn saved_wifi() -> Vec<(String, String)> {
-    let Ok(list) = nmcli(&["-t", "-f", "UUID,TYPE", "connection", "show"]) else { return Vec::new() };
-    list.lines()
-        .map(fields)
-        .filter(|f| f.len() >= 2 && f[1] == "802-11-wireless")
-        .filter_map(|f| {
-            let ssid = nmcli(&["-g", "802-11-wireless.ssid", "connection", "show", &f[0]]).ok()?;
-            Some((unescape(ssid.trim()), f[0].clone()))
-        })
-        .collect()
-}
-
-fn nmcli(args: &[&str]) -> Result<String, String> {
-    nmcli_input(args, "")
-}
-
-fn nmcli_input(args: &[&str], input: &str) -> Result<String, String> {
-    let mut child = Command::new("nmcli")
-        .args(args)
-        .env("LC_ALL", "C")
-        .stdin(if input.is_empty() { Stdio::null() } else { Stdio::piped() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { "needs NetworkManager (nmcli), which isn't here".to_string() } else { e.to_string() })?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input.as_bytes());
-    }
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    // The editor says what went wrong on its output, and still exits 0.
-    let editor_error = !input.is_empty() && stdout.lines().any(|l| l.contains("Error:"));
-    if out.status.success() && !editor_error {
-        return Ok(stdout);
-    }
-    let text = String::from_utf8_lossy(&out.stderr).to_string() + &stdout;
-    let line = text.lines().find(|l| l.contains("Error:")).or(text.lines().find(|l| !l.trim().is_empty())).unwrap_or("nmcli failed");
-    let line = line.split("Error:").last().unwrap_or(line).trim().trim_end_matches('.');
-    Err(line.to_string())
-}
-
-/// A line of `nmcli -t`: fields split on ':', with "\:" and "\\" kept.
-fn fields(line: &str) -> Vec<String> {
-    let mut out = vec![String::new()];
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => out.last_mut().unwrap().extend(chars.next()),
-            ':' => out.push(String::new()),
-            c => out.last_mut().unwrap().push(c),
-        }
-    }
-    out
-}
-
-fn unescape(s: &str) -> String {
-    fields(s).join(":")
-}
-
-/// "KEY:value" lines, as `nmcli -t ... show` gives them.
-fn keyed(text: &str) -> Vec<(String, String)> {
-    text.lines().filter_map(|l| l.split_once(':')).map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    backend::primary_dev().as_deref() == Some(dev)
 }
 
 /// "255.255.255.0" for 24.
@@ -694,23 +431,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terse_fields() {
-        assert_eq!(fields(r"*:Home\:Net:WPA2:5240 MHz:79"), ["*", "Home:Net", "WPA2", "5240 MHz", "79"]);
-        assert_eq!(fields("a::b"), ["a", "", "b"]);
-    }
-
-    #[test]
     fn masks() {
         assert_eq!(mask(24), "255.255.255.0");
         assert_eq!(mask(0), "0.0.0.0");
         assert_eq!(prefix("255.255.255.0"), Some(24));
         assert_eq!(prefix("255.255.0.255"), None);
         assert_eq!(prefix("0.0.0.0"), Some(0));
-    }
-
-    #[test]
-    fn models() {
-        assert_eq!(model("MEDIATEK Corp.".into(), "MT7922 802.11ax PCI Express Wireless Network Adapter".into()), "MediaTek MT7922");
-        assert_eq!(model("Realtek Semiconductor Co., Ltd.".into(), "RTL8111/8168/8211/8411 PCI Express Gigabit Ethernet Controller".into()), "Realtek RTL8111/8168/8211/8411");
     }
 }

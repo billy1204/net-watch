@@ -82,6 +82,9 @@ pub struct Shared {
     pub net: crate::netif::Net,
     /// The open window's context; `None` while the window is closed.
     pub ctx: Option<egui::Context>,
+    /// The window is hidden in the tray, though still there (on Windows,
+    /// where it isn't closed and opened again).
+    pub hidden: bool,
     pub quit: bool,
 }
 
@@ -190,12 +193,23 @@ impl Core {
     }
 
     pub fn window_open(&self) -> bool {
-        self.state.lock().unwrap().ctx.is_some()
+        let st = self.state.lock().unwrap();
+        st.ctx.is_some() && !st.hidden
     }
 
     pub fn show_window(&self) {
-        match self.state.lock().unwrap().ctx.clone() {
+        let (ctx, hidden) = {
+            let mut st = self.state.lock().unwrap();
+            (st.ctx.clone(), std::mem::take(&mut st.hidden))
+        };
+        if hidden {
+            #[cfg(windows)]
+            crate::win::show_main();
+            crate::refresh_tray();
+        }
+        match ctx {
             Some(ctx) => {
+                ctx.request_repaint();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
@@ -206,6 +220,9 @@ impl Core {
     }
 
     pub fn toggle_window(&self) {
+        if self.state.lock().unwrap().hidden {
+            return self.show_window();
+        }
         match self.state.lock().unwrap().ctx.clone() {
             Some(ctx) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             None => {

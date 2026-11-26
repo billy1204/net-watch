@@ -212,7 +212,7 @@ impl Tool for Apps {
             }
             if s.apps.iter().any(|a| a.other_user) {
                 ui.add_space(6.0);
-                ui.add(egui::Label::new(egui::RichText::new("\"System\" rows are programs run by the system or other users: Linux only shows which program they are to an admin.").small().color(pal().weak)).wrap());
+                ui.add(egui::Label::new(egui::RichText::new(SYSTEM_NOTE).small().color(pal().weak)).wrap());
             }
         });
     }
@@ -221,3 +221,8 @@ impl Tool for Apps {
         900.0
     }
 }
+
+#[cfg(target_os = "linux")]
+const SYSTEM_NOTE: &str = "\"System\" rows are programs run by the system or other users: Linux only shows which program they are to an admin.";
+#[cfg(windows)]
+const SYSTEM_NOTE: &str = "\"Windows services\" are the many parts of Windows that share one program (svchost) to run in the background.";

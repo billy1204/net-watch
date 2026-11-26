@@ -126,6 +126,20 @@ fn hosts(me: Ipv4Addr, bits: u32) -> (Vec<Ipv4Addr>, String) {
     (hosts, format!("{}/{bits}", Ipv4Addr::from(net)))
 }
 
+#[cfg(windows)]
+fn network() -> Result<Net, String> {
+    let route = crate::win::default_routes().into_iter().next().ok_or("not connected to a network")?;
+    // No router on the default route (a VPN or tether): no home network
+    // to scan from here.
+    let router = route.router.ok_or("no router on this connection (a VPN or tether?)")?;
+    let me = my_address(router).ok_or("couldn't find this computer's address")?;
+    let adapter = crate::win::adapters().into_iter().find(|a| a.luid == route.luid);
+    let bits = adapter.as_ref().and_then(|a| a.v4.iter().find(|(ip, _)| *ip == me)).map_or(24, |(_, b)| *b as u32);
+    let (hosts, range) = hosts(me, bits);
+    Ok(Net { me, hosts, range, iface: adapter.map(|a| a.name), router: Some(router) })
+}
+
+#[cfg(target_os = "linux")]
 fn network() -> Result<Net, String> {
     let table = std::fs::read_to_string("/proc/net/route").map_err(|e| e.to_string())?;
     let rows: Vec<Vec<&str>> = table.lines().skip(1).map(|l| l.split_whitespace().collect()).collect();
@@ -150,6 +164,13 @@ fn network() -> Result<Net, String> {
 
 /// The computer's address table: which addresses on the network answered,
 /// with their hardware addresses.
+#[cfg(windows)]
+fn neighbours(net: &Net) -> HashMap<Ipv4Addr, String> {
+    let index = crate::win::adapters().into_iter().find(|a| Some(&a.name) == net.iface.as_ref()).map(|a| a.index);
+    crate::win::neighbours().into_iter().filter(|n| Some(n.2) == index).map(|(ip, mac, _)| (ip, mac)).collect()
+}
+
+#[cfg(target_os = "linux")]
 fn neighbours(net: &Net) -> HashMap<Ipv4Addr, String> {
     let table = std::fs::read_to_string("/proc/net/arp").unwrap_or_default();
     table
@@ -328,7 +349,10 @@ fn knock(ips: &[Ipv4Addr]) -> Vec<Vec<u16>> {
 /// copy (Debian and Ubuntu's ieee-data).
 fn makers(macs: &HashSet<String>) -> HashMap<String, String> {
     let want: HashSet<String> = macs.iter().filter_map(|m| prefix(m)).collect();
-    let list = ["/usr/share/ieee-data/oui.csv", "/var/lib/ieee-data/oui.csv"].iter().find_map(|p| std::fs::read_to_string(p).ok());
+    // Or a copy put in Net Watch's own folder (on Windows, the only place).
+    let own = crate::store::data_dir().map(|d| d.join("oui.csv"));
+    let paths = ["/usr/share/ieee-data/oui.csv".into(), "/var/lib/ieee-data/oui.csv".into()].into_iter().chain(own);
+    let list = paths.into_iter().find_map(|p: std::path::PathBuf| std::fs::read_to_string(p).ok());
     let mut found = HashMap::new();
     for line in list.as_deref().unwrap_or("").lines() {
         let mut parts = line.splitn(3, ',');
@@ -372,6 +396,13 @@ fn tidy_maker(name: &str) -> String {
         .collect()
 }
 
+#[cfg(windows)]
+fn my_mac(net: &Net) -> Option<String> {
+    let iface = net.iface.as_ref()?;
+    crate::win::adapters().into_iter().find(|a| &a.name == iface).map(|a| a.mac.to_lowercase()).filter(|m| !m.is_empty())
+}
+
+#[cfg(target_os = "linux")]
 fn my_mac(net: &Net) -> Option<String> {
     let iface = net.iface.as_ref()?;
     let mac = std::fs::read_to_string(format!("/sys/class/net/{iface}/address")).ok()?;

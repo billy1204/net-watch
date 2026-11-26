@@ -1,10 +1,13 @@
 //! What's using the network: which programs on this computer have
 //! connections open and to whose servers, which ones wait for others to
-//! connect, and how fast data is moving. Read from /proc without admin
-//! rights, so other users' and system programs show by their user's name.
+//! connect, and how fast data is moving. Read without admin rights: from
+//! /proc on Linux, where other users' and system programs show by their
+//! user's name; from Windows' TCP and UDP tables, which name every program.
 use crate::store::Time;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
+#[cfg(target_os = "linux")]
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Instant;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -13,6 +16,7 @@ pub enum Proto {
     Udp,
 }
 
+#[cfg(target_os = "linux")]
 /// One socket from /proc/net/{tcp,udp}{,6}.
 #[derive(Clone, Debug, PartialEq)]
 struct Socket {
@@ -23,6 +27,16 @@ struct Socket {
     listening: bool,
     uid: u32,
     inode: u64,
+}
+
+/// A socket with the program holding it.
+struct Held {
+    proto: Proto,
+    local: SocketAddr,
+    remote: Option<SocketAddr>,
+    listening: bool,
+    name: String,
+    other_user: bool,
 }
 
 /// A connection out to somewhere.
@@ -86,6 +100,7 @@ impl Snapshot {
 
 // -- Reading /proc ------------------------------------------------------------
 
+#[cfg(target_os = "linux")]
 /// "0100007F:0035" (IPv4) or 32 hex digits and a port (IPv6), each 32-bit
 /// word in the computer's own byte order.
 fn parse_addr(s: &str) -> Option<SocketAddr> {
@@ -107,6 +122,7 @@ fn parse_addr(s: &str) -> Option<SocketAddr> {
     Some(SocketAddr::new(ip, port))
 }
 
+#[cfg(target_os = "linux")]
 fn parse_table(text: &str, proto: Proto) -> Vec<Socket> {
     text.lines()
         .skip(1)
@@ -130,6 +146,7 @@ fn parse_table(text: &str, proto: Proto) -> Vec<Socket> {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
 /// Ports handed out for programs' own outgoing use (32768 to 60999 unless
 /// set otherwise).
 fn temporary(port: u16) -> bool {
@@ -142,6 +159,13 @@ fn temporary(port: u16) -> bool {
     (lo..=hi).contains(&port)
 }
 
+/// Ports Windows hands out for programs' own outgoing use.
+#[cfg(windows)]
+fn temporary(port: u16) -> bool {
+    port >= 49152
+}
+
+#[cfg(target_os = "linux")]
 fn sockets() -> Vec<Socket> {
     [("tcp", Proto::Tcp), ("tcp6", Proto::Tcp), ("udp", Proto::Udp), ("udp6", Proto::Udp)]
         .iter()
@@ -149,6 +173,7 @@ fn sockets() -> Vec<Socket> {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
 /// Which program holds each socket, for the programs we may look into
 /// (this user's own).
 fn holders() -> HashMap<u64, String> {
@@ -168,6 +193,7 @@ fn holders() -> HashMap<u64, String> {
     map
 }
 
+#[cfg(target_os = "linux")]
 /// A program's name as people know it.
 fn program(pid: &str) -> String {
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default().trim().to_string();
@@ -213,6 +239,7 @@ fn program(pid: &str) -> String {
     c.next().map_or_else(|| format!("Program {pid}"), |f| f.to_uppercase().chain(c).collect())
 }
 
+#[cfg(target_os = "linux")]
 /// User names by number, from /etc/passwd.
 fn users() -> HashMap<u32, String> {
     std::fs::read_to_string("/etc/passwd")
@@ -225,6 +252,7 @@ fn users() -> HashMap<u32, String> {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
 /// A system user's programs as people know them.
 fn system_name(user: &str) -> String {
     match user {
@@ -241,7 +269,126 @@ fn system_name(user: &str) -> String {
     }
 }
 
+/// Bytes in and out on every real adapter.
+#[cfg(windows)]
+fn totals() -> Option<(Instant, u64, u64)> {
+    let (rx, tx) = crate::win::byte_totals()?;
+    Some((Instant::now(), rx, tx))
+}
+
+/// A Windows program's name as people know it ("chrome.exe" → "Chrome"),
+/// and whether it's part of Windows itself rather than the user's.
+#[cfg(windows)]
+fn program(pid: u32, exe: &str) -> (String, bool) {
+    let known = [
+        ("chrome.exe", "Chrome"),
+        ("msedge.exe", "Edge"),
+        ("msedgewebview2.exe", "Edge WebView (app windows)"),
+        ("firefox.exe", "Firefox"),
+        ("brave.exe", "Brave"),
+        ("opera.exe", "Opera"),
+        ("thunderbird.exe", "Thunderbird"),
+        ("outlook.exe", "Outlook"),
+        ("olk.exe", "Outlook"),
+        ("code.exe", "VS Code"),
+        ("discord.exe", "Discord"),
+        ("slack.exe", "Slack"),
+        ("spotify.exe", "Spotify"),
+        ("steam.exe", "Steam"),
+        ("steamwebhelper.exe", "Steam"),
+        ("zoom.exe", "Zoom"),
+        ("ms-teams.exe", "Teams"),
+        ("teams.exe", "Teams"),
+        ("onedrive.exe", "OneDrive"),
+        ("dropbox.exe", "Dropbox"),
+        ("signal.exe", "Signal"),
+        ("telegram.exe", "Telegram"),
+        ("whatsapp.exe", "WhatsApp"),
+        ("claude.exe", "Claude"),
+        ("net-watch.exe", "Net Watch"),
+        ("explorer.exe", "File Explorer"),
+        ("searchhost.exe", "Windows Search"),
+        ("phoneexperiencehost.exe", "Phone Link"),
+        ("widgets.exe", "Widgets"),
+        ("speedtest.exe", "Speedtest"),
+    ];
+    let system = [
+        ("svchost.exe", "Windows services"),
+        ("lsass.exe", "Windows sign-in (lsass)"),
+        ("services.exe", "Windows services"),
+        ("wininit.exe", "Windows start-up"),
+        ("spoolsv.exe", "Printing"),
+        ("msmpeng.exe", "Microsoft Defender"),
+        ("mpdefendercoreservice.exe", "Microsoft Defender"),
+        ("nissrv.exe", "Microsoft Defender"),
+        ("smartscreen.exe", "Microsoft Defender SmartScreen"),
+        ("wudfhost.exe", "Device drivers"),
+        ("dashost.exe", "Device discovery"),
+        ("mdnsresponder.exe", "Device discovery (Bonjour)"),
+    ];
+    if pid == 4 || exe.eq_ignore_ascii_case("System") {
+        return ("Windows (System)".into(), true);
+    }
+    if let Some((_, nice)) = system.iter().find(|k| k.0.eq_ignore_ascii_case(exe)) {
+        return (nice.to_string(), true);
+    }
+    if let Some((_, nice)) = known.iter().find(|k| k.0.eq_ignore_ascii_case(exe)) {
+        return (nice.to_string(), false);
+    }
+    let stem = exe.strip_suffix(".exe").or_else(|| exe.strip_suffix(".EXE")).unwrap_or(exe);
+    let mut c = stem.chars();
+    match c.next() {
+        Some(f) => (f.to_uppercase().chain(c).collect(), false),
+        // It ended between the two looks.
+        None => (format!("Program {pid}"), false),
+    }
+}
+
+/// Every socket in use, with the program holding it.
+#[cfg(windows)]
+fn held_sockets(_known: &mut Known) -> Vec<Held> {
+    let names = crate::win::process_names();
+    crate::win::sockets()
+        .into_iter()
+        .filter_map(|s| {
+            let proto = if s.tcp { Proto::Tcp } else { Proto::Udp };
+            // Waiting on 127.0.0.1 only isn't using the network, and a UDP
+            // port from the temporary range is a program's own outgoing one.
+            let listening = s.listening && !s.local.ip().is_loopback() && (s.tcp || (s.local.port() != 0 && !temporary(s.local.port())));
+            if !listening && s.remote.is_none() {
+                return None;
+            }
+            let (name, other_user) = program(s.pid, names.get(&s.pid).map_or("", String::as_str));
+            Some(Held { proto, local: s.local, remote: s.remote, listening, name, other_user })
+        })
+        .collect()
+}
+
+/// Every socket in use, with the program holding it: this user's by
+/// name, others' by their user.
+#[cfg(target_os = "linux")]
+fn held_sockets(known: &mut Known) -> Vec<Held> {
+    let socks = sockets();
+    let users = users();
+    let me = users_me();
+    if socks.iter().any(|s| Some(s.uid) == me && s.inode != 0 && !known.held.contains_key(&s.inode)) {
+        known.held = holders();
+    }
+    socks
+        .into_iter()
+        .map(|s| {
+            let (name, other_user) = match known.held.get(&s.inode) {
+                Some(n) => (n.clone(), false),
+                None if Some(s.uid) == me => ("This user (program not found)".into(), false),
+                None => (system_name(users.get(&s.uid).map_or("unknown", String::as_str)), true),
+            };
+            Held { proto: s.proto, local: s.local, remote: s.remote, listening: s.listening, name, other_user }
+        })
+        .collect()
+}
+
 /// Bytes in and out on every real adapter, from /proc/net/dev.
+#[cfg(target_os = "linux")]
 fn totals() -> Option<(Instant, u64, u64)> {
     let text = std::fs::read_to_string("/proc/net/dev").ok()?;
     let (mut rx, mut tx) = (0, 0);
@@ -270,18 +417,13 @@ fn local(ip: IpAddr) -> bool {
 #[derive(Default)]
 pub struct Known {
     pub owners: HashMap<IpAddr, Option<String>>,
+    #[cfg_attr(windows, allow(dead_code))]
     held: HashMap<u64, String>,
 }
 
 /// Look now. `last` gives the speed since then.
 pub fn look(last: Option<&Snapshot>, known: &mut Known) -> Snapshot {
-    let socks = sockets();
-    let users = users();
-    let me = users_me();
-    if socks.iter().any(|s| Some(s.uid) == me && s.inode != 0 && !known.held.contains_key(&s.inode)) {
-        known.held = holders();
-    }
-    let held = &known.held;
+    let socks = held_sockets(known);
     let owners = &mut known.owners;
     // Whose servers, for addresses not seen before (at most 200 at a time).
     let new: Vec<IpAddr> = socks.iter().filter_map(|s| s.remote.map(|r| r.ip())).filter(|ip| !local(*ip) && !owners.contains_key(ip)).collect::<std::collections::BTreeSet<_>>().into_iter().take(200).collect();
@@ -296,11 +438,7 @@ pub fn look(last: Option<&Snapshot>, known: &mut Known) -> Snapshot {
         if s.remote.is_some_and(|r| r.ip().is_loopback()) {
             continue;
         }
-        let (name, other_user) = match held.get(&s.inode) {
-            Some(n) => (n.clone(), false),
-            None if Some(s.uid) == me => ("This user (program not found)".into(), false),
-            None => (system_name(users.get(&s.uid).map_or("unknown", String::as_str)), true),
-        };
+        let (name, other_user) = (s.name.clone(), s.other_user);
         let i = match apps.iter().position(|a| a.name == name) {
             Some(i) => i,
             None => {
@@ -332,6 +470,7 @@ pub fn look(last: Option<&Snapshot>, known: &mut Known) -> Snapshot {
     Snapshot { at: chrono::Local::now(), apps, rate, totals: now }
 }
 
+#[cfg(target_os = "linux")]
 /// This user's number, from who owns our own /proc entry.
 fn users_me() -> Option<u32> {
     use std::os::unix::fs::MetadataExt;
@@ -380,6 +519,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn reads_the_tables() {
         assert_eq!(parse_addr("0100007F:0035"), Some("127.0.0.1:53".parse().unwrap()));
         assert_eq!(parse_addr("00470626000010000000000096231468:01BB"), Some("[2606:4700:10::6814:2396]:443".parse().unwrap()));

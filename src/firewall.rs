@@ -159,7 +159,38 @@ fn try_kind(k: &Kind) -> Outcome {
     }
 }
 
+/// This computer's own firewall: Windows Defender Firewall's settings for
+/// each kind of network, a group policy's first. No admin rights needed.
+#[cfg(windows)]
+fn computer() -> (String, Option<bool>) {
+    use crate::win::reg_dword;
+    use windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+    let on = |profile: &str| {
+        reg_dword(HKEY_LOCAL_MACHINE, &format!(r"SOFTWARE\Policies\Microsoft\WindowsFirewall\{profile}"), "EnableFirewall")
+            .or_else(|| reg_dword(HKEY_LOCAL_MACHINE, &format!(r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\{profile}"), "EnableFirewall"))
+            .map(|v| v != 0)
+    };
+    let (private, public, domain) = (on("StandardProfile"), on("PublicProfile"), on("DomainProfile"));
+    match (private, public) {
+        (Some(true), Some(true)) => (
+            "On: Windows Defender Firewall is on for private and public networks. It normally lets everything out and stops others getting in.".into(),
+            Some(true),
+        ),
+        (Some(false), Some(false)) => (
+            "Off: Windows Defender Firewall is turned off (another security program may have taken over; check Windows Security).".into(),
+            Some(false),
+        ),
+        (Some(pr), Some(pu)) => {
+            let off = if !pr { "private (home) networks" } else { "public networks" };
+            let _ = (pu, domain);
+            (format!("Partly on: Windows Defender Firewall is off for {off}. Check Windows Security › Firewall & network protection."), Some(false))
+        }
+        _ => ("Couldn't tell whether Windows Defender Firewall is on.".into(), None),
+    }
+}
+
 /// This computer's own firewall, as far as we can tell without admin rights.
+#[cfg(target_os = "linux")]
 fn computer() -> (String, Option<bool>) {
     let active = |unit: &str| {
         std::process::Command::new("systemctl")

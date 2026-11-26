@@ -3,6 +3,7 @@
 //! get sent to an ad page, and whether lookups are encrypted.
 use crate::store::Time;
 use std::net::{Ipv4Addr, UdpSocket};
+#[cfg(target_os = "linux")]
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -221,9 +222,29 @@ fn redirects(server: Ipv4Addr) -> Option<bool> {
     Some(a.code == 0 && a.records > 0)
 }
 
+/// The servers this computer really asks, and whether it encrypts: those
+/// of the adapter the internet goes through, and whether Windows has DNS
+/// over HTTPS set up for them there (or required for all).
+#[cfg(windows)]
+fn yours() -> (Vec<Ipv4Addr>, Option<bool>) {
+    use crate::win;
+    use windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+    let all = win::adapters();
+    let main = win::default_routes().into_iter().next().and_then(|r| all.iter().find(|a| a.luid == r.luid).cloned());
+    let Some(main) = main else { return (Vec::new(), None) };
+    let mut servers: Vec<Ipv4Addr> = main.dns.iter().filter_map(|ip| if let std::net::IpAddr::V4(v) = ip { Some(*v) } else { None }).collect();
+    servers.dedup();
+    let key = format!(r"SYSTEM\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters\{}\DohInterfaceSettings\Doh", main.guid);
+    let set_up = win::reg_subkeys(HKEY_LOCAL_MACHINE, &key);
+    let per_server = servers.iter().any(|s| set_up.iter().any(|k| k == &s.to_string()));
+    let required = win::reg_dword(HKEY_LOCAL_MACHINE, r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "DoHPolicy").is_some_and(|p| p == 3);
+    (servers, Some(per_server || required))
+}
+
 /// The servers this computer really asks, and whether it encrypts:
 /// systemd-resolved's for the link the internet goes through, else
 /// /etc/resolv.conf's.
+#[cfg(target_os = "linux")]
 fn yours() -> (Vec<Ipv4Addr>, Option<bool>) {
     let mut servers = Vec::new();
     let mut encrypted = None;
