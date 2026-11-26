@@ -143,24 +143,36 @@ impl Tool for Apps {
             }
             for a in talking {
                 let open = self.open.as_deref() == Some(a.name.as_str());
-                let row = ui
-                    .horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        ui.label(egui::RichText::new(if open { "⏷" } else { "⏵" }).color(pal().weak));
-                        ui.label(egui::RichText::new(&a.name).strong());
-                        ui.label(weak(&format!("{} connection{}", a.links.len(), if a.links.len() == 1 { "" } else { "s" })));
-                        let owners = a.owners();
-                        let shown = if narrow { 2 } else { 4 };
-                        for (o, _) in owners.iter().take(shown) {
-                            super::pill(ui, o, pal().accent);
-                        }
-                        if owners.len() > shown {
-                            ui.label(weak(&format!("+{} more", owners.len() - shown)));
-                        }
+                // The whole row is the button: highlighted under the pointer,
+                // and its words aren't selectable text, which would take the
+                // click for themselves.
+                let id = ui.id().with(("program", &a.name));
+                let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+                let rect = egui::Frame::new()
+                    .fill(if hovered { pal().accent.gamma_multiply(0.08) } else { egui::Color32::TRANSPARENT })
+                    .corner_radius(8)
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.style_mut().interaction.selectable_labels = false;
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            ui.label(egui::RichText::new(if open { "⏷" } else { "⏵" }).color(pal().weak));
+                            ui.label(egui::RichText::new(&a.name).strong());
+                            ui.label(weak(&format!("{} connection{}", a.links.len(), if a.links.len() == 1 { "" } else { "s" })));
+                            let owners = a.owners();
+                            let shown = if narrow { 2 } else { 4 };
+                            for (o, _) in owners.iter().take(shown) {
+                                super::pill(ui, o, pal().accent);
+                            }
+                            if owners.len() > shown {
+                                ui.label(weak(&format!("+{} more", owners.len() - shown)));
+                            }
+                        });
                     })
                     .response
-                    .interact(egui::Sense::click())
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    .rect;
+                let row = ui.interact(rect, id, egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
                 if row.clicked() {
                     self.open = if open { None } else { Some(a.name.clone()) };
                 }
