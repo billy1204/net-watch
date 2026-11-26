@@ -169,6 +169,17 @@ impl Tool for Devices {
                 ui.end_row();
                 for d in &scan.devices {
                     ui.horizontal(|ui| {
+                        // A picture only for what it surely is; an empty
+                        // space otherwise, so the names line up.
+                        match sure(d) {
+                            Some((sort, why)) => {
+                                let color = if sort == Sort::Router { good() } else { pal().accent };
+                                device_icon(ui, sort, color, 18.0).on_hover_text(why);
+                            }
+                            None => {
+                                ui.add_space(18.0);
+                            }
+                        }
                         let name = d.name.clone().unwrap_or_else(|| if narrow { d.maker_text() } else { "Unnamed".into() });
                         let r = ui.label(if d.name.is_some() { egui::RichText::new(name) } else { weak(&name) });
                         let ports: Vec<String> = d.ports.iter().map(u16::to_string).collect();
@@ -199,6 +210,100 @@ impl Tool for Devices {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Sort {
+    Router,
+    Computer,
+    Tv,
+    Phone,
+    Printer,
+    Camera,
+    Speaker,
+}
+
+/// What a device surely is, and how we know: from the router's own table,
+/// a port only that kind of device answers on, or the name it gives itself.
+/// None when it's only a guess (AirPlay, say, is TVs, Macs and speakers).
+fn sure(d: &crate::devices::Device) -> Option<(Sort, &'static str)> {
+    let name = d.name.as_deref().unwrap_or("").to_lowercase();
+    let on = |port: u16| d.ports.contains(&port);
+    let named = |words: &[&str]| words.iter().any(|w| name.contains(w));
+    Some(if d.router {
+        (Sort::Router, "Your router")
+    } else if d.me {
+        (Sort::Computer, "This computer")
+    } else if on(8060) {
+        (Sort::Tv, "A Roku: it answers on Roku's own port")
+    } else if on(1400) {
+        (Sort::Speaker, "A Sonos speaker: it answers on Sonos's own port")
+    } else if on(62078) {
+        (Sort::Phone, "An iPhone or iPad: it answers on Apple's phone-sync port")
+    } else if named(&["iphone", "ipad"]) {
+        (Sort::Phone, "An iPhone or iPad, by its name")
+    } else if named(&["pixel-", "galaxy", "z-flip", "z-fold", "android"]) {
+        (Sort::Phone, "A phone, by its name")
+    } else if on(9100) || on(631) {
+        (Sort::Printer, "A printer: it answers on a printing port")
+    } else if on(554) {
+        (Sort::Camera, "A camera: it answers on the camera-video port")
+    } else if name.starts_with("desktop-") || name.starts_with("laptop-") || named(&["macbook", "imac"]) {
+        (Sort::Computer, "A computer, by its name")
+    } else if on(548) {
+        (Sort::Computer, "A Mac: it answers on Mac file sharing")
+    } else {
+        return None;
+    })
+}
+
+/// A line drawing of a kind of device, `size` points square.
+fn device_icon(ui: &mut egui::Ui, sort: Sort, color: Color32, size: f32) -> egui::Response {
+    use egui::{Rect, Stroke, StrokeKind};
+    let (rect, resp) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
+    let p = ui.painter();
+    let s = size / 16.0;
+    let c = rect.center();
+    let at = |x: f32, y: f32| c + vec2(x, y) * s;
+    let stroke = Stroke::new(1.5 * s, color);
+    let boxed = |x: f32, y: f32, w: f32, h: f32, r: f32| p.rect_stroke(Rect::from_center_size(at(x, y), vec2(w, h) * s), r * s, stroke, StrokeKind::Middle);
+    match sort {
+        Sort::Router => {
+            boxed(0.0, 3.0, 14.0, 5.5, 1.5);
+            p.line_segment([at(-4.0, 0.2), at(-5.5, -6.5)], stroke);
+            p.line_segment([at(4.0, 0.2), at(5.5, -6.5)], stroke);
+            p.circle_filled(at(-3.5, 3.0), 0.9 * s, color);
+            p.circle_filled(at(0.0, 3.0), 0.9 * s, color);
+        }
+        Sort::Computer => {
+            boxed(0.0, -1.5, 11.0, 8.0, 1.0);
+            p.line_segment([at(-7.5, 4.5), at(7.5, 4.5)], Stroke::new(2.0 * s, color));
+        }
+        Sort::Tv => {
+            boxed(0.0, -1.5, 14.0, 9.5, 1.5);
+            p.line_segment([at(0.0, 3.3), at(0.0, 6.0)], stroke);
+            p.line_segment([at(-3.5, 6.0), at(3.5, 6.0)], stroke);
+        }
+        Sort::Phone => {
+            boxed(0.0, 0.0, 8.5, 14.0, 2.0);
+            p.circle_filled(at(0.0, 4.8), 0.9 * s, color);
+        }
+        Sort::Printer => {
+            boxed(0.0, -5.0, 7.0, 3.5, 0.5);
+            boxed(0.0, 0.5, 14.0, 6.5, 1.5);
+            boxed(0.0, 5.0, 7.0, 3.0, 0.5);
+        }
+        Sort::Camera => {
+            boxed(-2.0, 0.0, 10.0, 8.0, 1.5);
+            p.add(egui::Shape::convex_polygon(vec![at(3.5, -1.2), at(7.0, -3.5), at(7.0, 3.5), at(3.5, 1.2)], Color32::TRANSPARENT, stroke));
+        }
+        Sort::Speaker => {
+            boxed(0.0, 0.0, 10.0, 14.0, 2.0);
+            p.circle_stroke(at(0.0, 2.3), 2.8 * s, stroke);
+            p.circle_filled(at(0.0, -4.0), 0.9 * s, color);
+        }
+    }
+    resp
+}
+
 /// A symbol for what a device seems to be.
 fn kind(d: &crate::devices::Device) -> &'static str {
     let name = d.name.as_deref().unwrap_or("").to_lowercase();
@@ -226,4 +331,40 @@ fn kind(d: &crate::devices::Device) -> &'static str {
 /// "15 min" or "hour".
 fn every(mins: u64) -> String {
     if mins >= 60 { "hour".into() } else { format!("{mins} min") }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::devices::Device;
+
+    fn device(name: Option<&str>, ports: &[u16], private_mac: bool) -> Device {
+        Device {
+            ip: "192.168.1.9".parse().unwrap(),
+            mac: None,
+            name: name.map(str::to_string),
+            maker: None,
+            private_mac,
+            ports: ports.to_vec(),
+            me: false,
+            router: false,
+            first_seen: chrono::Local::now(),
+            new: false,
+            joined: false,
+        }
+    }
+
+    #[test]
+    fn sure_only_when_known() {
+        let sort = |d: Device| sure(&d).map(|s| s.0);
+        assert_eq!(sort(device(Some("X00400NAXFG5"), &[8060, 7000], false)), Some(Sort::Tv));
+        assert_eq!(sort(device(Some("Delores-s-Z-Flip7"), &[], true)), Some(Sort::Phone));
+        assert_eq!(sort(device(None, &[62078], true)), Some(Sort::Phone));
+        assert_eq!(sort(device(Some("DESKTOP-K3V08PF"), &[], false)), Some(Sort::Computer));
+        assert_eq!(sort(device(None, &[631, 80], false)), Some(Sort::Printer));
+        // Guesses: a private address, AirPlay alone, a web page.
+        assert_eq!(sort(device(None, &[], true)), None);
+        assert_eq!(sort(device(None, &[7000], false)), None);
+        assert_eq!(sort(device(Some("Unnamed"), &[80, 443], false)), None);
+    }
 }
